@@ -4,7 +4,7 @@ import React, { useEffect, useState, useMemo } from "react";
 import { Table } from "@/components/ui/table";
 import { ShowMore } from "@/components/ui/show-more";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
-import type { VampRow } from "@/app/api/vamp/route";
+import type { VampRow } from "@/lib/vamp";
 
 const PAGE_SIZE = 25;
 
@@ -123,16 +123,28 @@ export default function Dashboard() {
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [meta, setMeta] = useState<{
+    generated_at?: string;
+    accounts_ok?: number;
+    accounts_total?: number;
+    errors: { account: string; error: string }[];
+  }>({ errors: [] });
 
   async function loadData() {
     try {
       setRefreshing(true);
       const res = await fetch("/api/vamp");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: VampRow[] = await res.json();
-      // Sort by VAMP ratio descending
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+      const data: VampRow[] = body.rows ?? [];
       data.sort((a, b) => b.vamp_ratio - a.vamp_ratio);
       setRows(data);
+      setMeta({
+        generated_at: body.generated_at,
+        accounts_ok: body.accounts_ok,
+        accounts_total: body.accounts_total,
+        errors: body.errors ?? [],
+      });
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load data");
@@ -152,7 +164,7 @@ export default function Dashboard() {
     return rows.filter((r) =>
       [
         r.statement_descriptor,
-        r.product_name,
+        r.account_name,
         r.report_month,
         r.as_of,
         r.status,
@@ -170,8 +182,8 @@ export default function Dashboard() {
   const visible = expanded ? filtered : filtered.slice(0, PAGE_SIZE);
 
   const asOfDate =
-    rows.length > 0
-      ? new Date(rows[0].as_of).toLocaleDateString("en-GB", {
+    meta.generated_at || rows.length > 0
+      ? new Date(meta.generated_at ?? rows[0].as_of).toLocaleDateString("en-GB", {
           day: "numeric",
           month: "short",
           year: "numeric",
@@ -254,17 +266,34 @@ export default function Dashboard() {
           </p>
         </div>
 
+        {/* Account fetch errors */}
+        {meta.errors.length > 0 && (
+          <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-900/40 dark:bg-amber-900/10 p-3 text-xs text-amber-800 dark:text-amber-300">
+            <strong>
+              {meta.errors.length} of {meta.accounts_total} accounts failed to
+              refresh:
+            </strong>{" "}
+            {meta.errors.map((e) => e.account).join(", ")}
+          </div>
+        )}
+
         {/* Stat cards */}
         {!loading && !error && rows.length > 0 && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
             <StatCard
               label="Total Descriptors"
               value={rows.length.toString()}
             />
             <StatCard
-              label="High Risk (≥15%)"
+              label="Total Sales"
               value={rows
-                .filter((r) => r.vamp_ratio >= 0.15)
+                .reduce((s, r) => s + r.sales_count, 0)
+                .toLocaleString()}
+            />
+            <StatCard
+              label="High Risk (≥1.5%)"
+              value={rows
+                .filter((r) => r.vamp_ratio >= 0.015)
                 .length.toString()}
               highlight
             />
@@ -295,7 +324,7 @@ export default function Dashboard() {
               setSearch(e.target.value);
               setExpanded(false);
             }}
-            placeholder="Search by descriptor, product, status, ratio…"
+            placeholder="Search by descriptor, account, status, ratio…"
             className="w-full h-10 pl-9 pr-4 text-sm rounded-lg border border-gray-alpha-400 bg-background-100 text-gray-1000 placeholder:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-1000/20 transition-shadow"
           />
           {search && (
@@ -330,12 +359,13 @@ export default function Dashboard() {
           <div className="relative">
             <Table>
               <Table.Colgroup>
-                <Table.Col className="w-[22%]" />
+                <Table.Col className="w-[20%]" />
                 <Table.Col className="w-[10%]" />
                 <Table.Col className="w-[7%]" />
+                <Table.Col className="w-[6%]" />
+                <Table.Col className="w-[6%]" />
                 <Table.Col className="w-[7%]" />
-                <Table.Col className="w-[7%]" />
-                <Table.Col className="w-[16%]" />
+                <Table.Col className="w-[13%]" />
                 <Table.Col className="w-[12%]" />
                 <Table.Col className="w-[12%]" />
                 <Table.Col className="w-[7%]" />
@@ -344,7 +374,8 @@ export default function Dashboard() {
               <Table.Header>
                 <Table.Row>
                   <Table.Head>Statement Descriptor</Table.Head>
-                  <Table.Head>Product</Table.Head>
+                  <Table.Head>Account</Table.Head>
+                  <Table.Head>Sales</Table.Head>
                   <Table.Head>Disputes</Table.Head>
                   <Table.Head>EFWs</Table.Head>
                   <Table.Head>VAMP Count</Table.Head>
@@ -365,8 +396,11 @@ export default function Dashboard() {
                     </Table.Cell>
                     <Table.Cell>
                       <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-background-200 border border-gray-alpha-400 text-gray-1000">
-                        {row.product_name}
+                        {row.account_name}
                       </span>
+                    </Table.Cell>
+                    <Table.Cell className="tabular-nums">
+                      {row.sales_count.toLocaleString()}
                     </Table.Cell>
                     <Table.Cell className="tabular-nums">
                       {row.disputes_count.toLocaleString()}
@@ -398,7 +432,7 @@ export default function Dashboard() {
                   <Table.Row>
                     <Table.Cell
                       className="text-gray-1000 font-medium"
-                      colSpan={6}
+                      colSpan={7}
                     >
                       Totals ({rows.length} descriptors)
                     </Table.Cell>
