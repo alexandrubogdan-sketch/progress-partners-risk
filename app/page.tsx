@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { Table } from "@/components/ui/table";
 import { ShowMore } from "@/components/ui/show-more";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 import type { VampRow } from "@/app/api/vamp/route";
 
 const PAGE_SIZE = 25;
@@ -229,10 +230,11 @@ export default function Dashboard() {
                 </span>
               </>
             )}
+            <ThemeToggle />
             <button
               onClick={loadData}
               disabled={refreshing}
-              className="ml-2 p-1.5 rounded-md hover:bg-background-200 transition-colors"
+              className="p-1.5 rounded-md hover:bg-background-200 transition-colors"
               title="Refresh data"
             >
               <RefreshIcon spinning={refreshing} />

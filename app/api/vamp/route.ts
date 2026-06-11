@@ -17,7 +17,7 @@ export type VampRow = {
   status: string;
 };
 
-// Sample data used when N8N_WEBHOOK_URL is not set (dev / preview)
+// Fallback mock data used when no data source is configured
 const MOCK_DATA: VampRow[] = [
   {
     statement_descriptor: "PDFBILLING.COM",
@@ -92,10 +92,56 @@ const MOCK_DATA: VampRow[] = [
 ];
 
 export async function GET() {
-  const webhookUrl = process.env.N8N_WEBHOOK_URL;
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 
+  // Primary: read from Supabase vamp_cache table
+  if (supabaseUrl && supabaseKey) {
+    try {
+      const res = await fetch(
+        `${supabaseUrl}/rest/v1/vamp_cache?select=*&order=vamp_ratio.desc`,
+        {
+          headers: {
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+            "Content-Type": "application/json",
+          },
+          next: { revalidate: 300 },
+        }
+      );
+
+      if (!res.ok) throw new Error(`Supabase returned ${res.status}`);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const data: any[] = await res.json();
+      const rows: VampRow[] = data.map((item) => ({
+        statement_descriptor: item.statement_descriptor ?? "",
+        report_month: item.report_month ?? "",
+        as_of: item.as_of ?? "",
+        product_name: item.product_name ?? "",
+        disputes_count: Number(item.disputes_count ?? 0),
+        efw_count: Number(item.efw_count ?? 0),
+        vamp_count: Number(item.vamp_count ?? 0),
+        vamp_ratio: parseFloat(item.vamp_ratio ?? 0),
+        dispute_volume: parseFloat(item.dispute_volume ?? 0),
+        efw_volume: parseFloat(item.efw_volume ?? 0),
+        vamp_volume: parseFloat(item.vamp_volume ?? 0),
+        status: item.status ?? "ACTIVE",
+      }));
+
+      return NextResponse.json(rows);
+    } catch (err) {
+      console.error("Failed to fetch from Supabase:", err);
+      return NextResponse.json(
+        { error: "Failed to fetch VAMP data" },
+        { status: 502 }
+      );
+    }
+  }
+
+  // Fallback: n8n webhook
+  const webhookUrl = process.env.N8N_WEBHOOK_URL;
   if (!webhookUrl) {
-    // Return mock data in development / when webhook not configured
     return NextResponse.json(MOCK_DATA);
   }
 
@@ -105,13 +151,9 @@ export async function GET() {
       next: { revalidate: 300 },
     });
 
-    if (!res.ok) {
-      throw new Error(`n8n webhook returned ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`n8n webhook returned ${res.status}`);
 
     const data = await res.json();
-    // n8n returns an array of objects — map field names to our schema
-    // Adjust the field mapping below if your n8n output uses different keys.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const rows: VampRow[] = (Array.isArray(data) ? data : [data]).map((item: any) => ({
       statement_descriptor: item["Statement Descriptor"] ?? item.statement_descriptor ?? "",
@@ -141,7 +183,6 @@ export async function GET() {
 function parseVampRatio(raw: unknown): number {
   if (typeof raw === "number") return raw;
   if (typeof raw === "string") {
-    // Handle "20.00%" format
     const cleaned = raw.replace("%", "").trim();
     const n = parseFloat(cleaned);
     return isNaN(n) ? 0 : n / 100;
