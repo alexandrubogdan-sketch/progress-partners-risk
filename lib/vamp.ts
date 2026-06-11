@@ -185,11 +185,23 @@ export async function fetchAccountVamp(
   }
 }
 
-/** Run accounts with limited concurrency (rate limits are per-account, so parallel is safe). */
-export async function buildSnapshot(
+export type AccountState = AccountResult & { refreshed_at: string };
+export type StateMap = Record<string, AccountState>;
+
+const REFRESH_IF_OLDER_MS = 20 * 60 * 1000; // don't redo accounts done <20min ago
+
+/**
+ * Incremental snapshot builder. Processes accounts that are missing, errored,
+ * or older than 20 minutes, under a time budget so the function never hits
+ * Vercel's max duration. Already-fresh accounts are kept from prevState.
+ * Run it repeatedly until remaining === 0.
+ */
+export async function buildSnapshotIncremental(
   accounts: { name: string; key: string }[],
-  concurrency = 6
-): Promise<Snapshot> {
+  prevState: StateMap,
+  deadline: number,
+  concurrency = 10
+): Promise<{ state: StateMap; snapshot: Snapshot; refreshed: number; remaining: number }> {
   const now = new Date();
   const monthStart = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
@@ -199,41 +211,71 @@ export async function buildSnapshot(
   const reportMonth = monthStart.toISOString().slice(0, 10);
   const asOf = now.toISOString();
 
-  const results: AccountResult[] = [];
+  const state: StateMap = { ...prevState };
+  // Drop state from a previous month
+  for (const [name, st] of Object.entries(state)) {
+    if (st.rows.length > 0 && st.rows[0].report_month !== reportMonth) {
+      delete state[name];
+    }
+  }
+
+  const needs = accounts.filter((a) => {
+    const st = state[a.name];
+    if (!st || !st.ok) return true;
+    return Date.now() - new Date(st.refreshed_at).getTime() > REFRESH_IF_OLDER_MS;
+  });
+  // Oldest data first
+  needs.sort((a, b) => {
+    const ta = state[a.name] ? new Date(state[a.name].refreshed_at).getTime() : 0;
+    const tb = state[b.name] ? new Date(state[b.name].refreshed_at).getTime() : 0;
+    return ta - tb;
+  });
+
+  let refreshed = 0;
   let i = 0;
   async function worker() {
-    while (i < accounts.length) {
-      const idx = i++;
-      const a = accounts[idx];
-      results[idx] = await fetchAccountVamp(
-        a.name,
-        a.key,
-        fromUnix,
-        toUnix,
-        reportMonth,
-        asOf
+    while (i < needs.length) {
+      const msLeft = deadline - Date.now();
+      if (msLeft < 15_000) return; // not enough budget to start another account
+      const a = needs[i++];
+      const timeout = new Promise<AccountResult>((resolve) =>
+        setTimeout(
+          () => resolve({ account: a.name, ok: false, error: `Timed out after ${Math.round(msLeft / 1000)}s — will retry next run`, rows: [] }),
+          msLeft - 5_000
+        )
       );
+      const res = await Promise.race([
+        fetchAccountVamp(a.name, a.key, fromUnix, toUnix, reportMonth, asOf),
+        timeout,
+      ]);
+      // Keep previous good data if this attempt failed
+      if (res.ok || !state[a.name]?.ok) {
+        state[a.name] = { ...res, refreshed_at: new Date().toISOString() };
+      }
+      if (res.ok) refreshed++;
     }
   }
   await Promise.all(
-    Array.from({ length: Math.min(concurrency, accounts.length) }, worker)
+    Array.from({ length: Math.min(concurrency, Math.max(needs.length, 1)) }, worker)
   );
 
-  const rows = results.flatMap((r) => r.rows);
+  const rows = Object.values(state).flatMap((r) => r.rows);
   rows.sort((a, b) => b.vamp_ratio - a.vamp_ratio);
   rows.forEach((r, idx) => (r.id = idx + 1));
 
-  return {
+  const okCount = accounts.filter((a) => state[a.name]?.ok).length;
+  const snapshot: Snapshot = {
     generated_at: asOf,
     report_month: reportMonth,
     window: { from: monthStart.toISOString(), to: asOf },
     accounts_total: accounts.length,
-    accounts_ok: results.filter((r) => r.ok).length,
-    errors: results
-      .filter((r) => !r.ok)
-      .map((r) => ({ account: r.account, error: r.error || "unknown" })),
+    accounts_ok: okCount,
+    errors: accounts
+      .filter((a) => state[a.name] && !state[a.name].ok)
+      .map((a) => ({ account: a.name, error: state[a.name].error || "unknown" })),
     rows,
   };
+  return { state, snapshot, refreshed, remaining: accounts.length - okCount };
 }
 
 const KEY_RE = /^(rk|sk)_(live|test)_/;
