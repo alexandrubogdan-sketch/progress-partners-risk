@@ -158,6 +158,23 @@ export default function Dashboard() {
     loadData();
   }, []);
 
+  // Auto-trigger a background refresh when data is missing or incomplete,
+  // then re-poll. The endpoint allows this only while data is incomplete/stale.
+  const triggered = React.useRef(false);
+  useEffect(() => {
+    const incomplete =
+      !loading &&
+      (error !== null ||
+        (meta.accounts_total !== undefined &&
+          (meta.accounts_ok ?? 0) < meta.accounts_total));
+    if (incomplete && !triggered.current) {
+      triggered.current = true;
+      fetch("/api/cron/refresh").catch(() => {});
+      const t = setInterval(() => loadData(), 30_000);
+      return () => clearInterval(t);
+    }
+  }, [loading, error, meta]);
+
   const filtered = useMemo(() => {
     if (!search.trim()) return rows;
     const q = search.toLowerCase();
