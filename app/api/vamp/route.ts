@@ -33,7 +33,7 @@ function getReportPeriod() {
   return { since, until, reportMonth };
 }
 
-async function stripeFetch(url: string, key: string, maxPages = 50): Promise<unknown[]> {
+async function stripeFetch(url: string, key: string, maxPages = 10): Promise<unknown[]> {
   const items: unknown[] = [];
   let after: string | null = null;
   for (let p = 0; p < maxPages; p++) {
@@ -66,27 +66,46 @@ function descFromCharge(charge: any): string {
   return (raw as string).toUpperCase().trim() || "UNKNOWN";
 }
 
+/**
+ * Fetch VAMP data for one account.
+ * Returns one row per unique statement descriptor.
+ *
+ * Approach: no charge expansion on disputes/EFWs (keeps payloads small and fast).
+ * Instead, build a chargeId→descriptor lookup from charges fetched over a 45-day
+ * window (current month + prior 45 days to cover disputes for last month's charges).
+ */
 async function fetchAccount(acc: StripeAccount, since: number, until: number): Promise<VampRow[]> {
   try {
     const q = `created[gte]=${since}&created[lte]=${until}&limit=100`;
+    // 45-day lookback on charges so we can attribute disputes for last-month charges
+    const chargeSince = since - 45 * 86400;
+    const chargeQ = `created[gte]=${chargeSince}&created[lte]=${until}&limit=100`;
 
-    // Disputes and EFWs: expand charge so we get the statement descriptor per event
+    // All three fetched in parallel, no expansion → small fast payloads
     const [charges, disputes, efws] = await Promise.all([
-      stripeFetch(`https://api.stripe.com/v1/charges?${q}`, acc.key),
-      stripeFetch(`https://api.stripe.com/v1/disputes?${q}&expand%5B%5D=data.charge`, acc.key),
-      stripeFetch(`https://api.stripe.com/v1/radar/early_fraud_warnings?${q}&expand%5B%5D=data.charge`, acc.key),
+      stripeFetch(`https://api.stripe.com/v1/charges?${chargeQ}`, acc.key, 10),
+      stripeFetch(`https://api.stripe.com/v1/disputes?${q}`, acc.key, 10),
+      stripeFetch(`https://api.stripe.com/v1/radar/early_fraud_warnings?${q}`, acc.key, 10),
     ]);
 
-    // Visa CNP sales count per descriptor (denominator)
+    // Build chargeId → descriptor map; also count Visa CNP for the current period
+    const chargeDescMap: Record<string, string> = {};
     const visaCountByDesc: Record<string, number> = {};
+
     for (const c of charges) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const charge = c as any;
-      const brand = (charge.payment_method_details?.card?.brand || "").toLowerCase();
-      if (brand !== "visa") continue;
       const desc = descFromCharge(charge);
-      if (desc === "UNKNOWN") continue;
-      visaCountByDesc[desc] = (visaCountByDesc[desc] || 0) + 1;
+      if (charge.id && desc !== "UNKNOWN") {
+        chargeDescMap[charge.id as string] = desc;
+      }
+      // Visa CNP denominator counts only the current month's charges
+      if ((charge.created as number) >= since) {
+        const brand = (charge.payment_method_details?.card?.brand || "").toLowerCase();
+        if (brand === "visa" && desc !== "UNKNOWN") {
+          visaCountByDesc[desc] = (visaCountByDesc[desc] || 0) + 1;
+        }
+      }
     }
 
     // Disputes per descriptor
@@ -95,11 +114,17 @@ async function fetchAccount(acc: StripeAccount, since: number, until: number): P
     for (const d of disputes) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const dispute = d as any;
-      const chargeObj = (typeof dispute.charge === "object" && dispute.charge !== null) ? dispute.charge : null;
-      const desc = chargeObj ? descFromCharge(chargeObj) : "UNKNOWN";
+      const chargeId: string | null =
+        typeof dispute.charge === "string"
+          ? dispute.charge
+          : typeof dispute.charge?.id === "string"
+          ? dispute.charge.id
+          : null;
+      const desc = chargeId ? (chargeDescMap[chargeId] ?? "UNKNOWN") : "UNKNOWN";
       if (desc === "UNKNOWN") continue;
       disputeCountByDesc[desc] = (disputeCountByDesc[desc] || 0) + 1;
-      disputeVolByDesc[desc] = (disputeVolByDesc[desc] || 0) + ((dispute.amount as number) || 0) / 100;
+      disputeVolByDesc[desc] =
+        (disputeVolByDesc[desc] || 0) + ((dispute.amount as number) || 0) / 100;
     }
 
     // EFWs per descriptor
@@ -107,13 +132,18 @@ async function fetchAccount(acc: StripeAccount, since: number, until: number): P
     for (const e of efws) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const efw = e as any;
-      const chargeObj = (typeof efw.charge === "object" && efw.charge !== null) ? efw.charge : null;
-      const desc = chargeObj ? descFromCharge(chargeObj) : "UNKNOWN";
+      const chargeId: string | null =
+        typeof efw.charge === "string"
+          ? efw.charge
+          : typeof efw.charge?.id === "string"
+          ? efw.charge.id
+          : null;
+      const desc = chargeId ? (chargeDescMap[chargeId] ?? "UNKNOWN") : "UNKNOWN";
       if (desc === "UNKNOWN") continue;
       efwCountByDesc[desc] = (efwCountByDesc[desc] || 0) + 1;
     }
 
-    // One row per unique descriptor across charges, disputes, and EFWs
+    // One row per descriptor
     const allDescs = new Set([
       ...Object.keys(visaCountByDesc),
       ...Object.keys(disputeCountByDesc),
