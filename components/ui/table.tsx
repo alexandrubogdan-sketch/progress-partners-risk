@@ -29,7 +29,7 @@ Table.Body = ({
   striped,
   interactive,
 }: {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   striped?: boolean;
   interactive?: boolean;
   virtualize?: boolean;
@@ -69,7 +69,7 @@ Table.Cell = ({
   className,
   colSpan,
 }: {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   className?: string;
   colSpan?: number;
 }) => {
