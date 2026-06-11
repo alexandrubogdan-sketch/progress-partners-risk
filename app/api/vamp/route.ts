@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 
-export const revalidate = 300; // cache for 5 minutes
+// Cache the full response for 1 hour; Next.js revalidates in the background
+// so users always get a fast response even when the cache is refreshing.
+export const revalidate = 3600;
 
 export type VampRow = {
   statement_descriptor: string;
@@ -10,14 +12,22 @@ export type VampRow = {
   disputes_count: number;
   efw_count: number;
   vamp_count: number;
-  vamp_ratio: number; // decimal, e.g. 0.2 = 20%
+  vamp_ratio: number; // decimal, e.g. 0.015 = 1.5%
   dispute_volume: number;
   efw_volume: number;
   vamp_volume: number;
   status: string;
 };
 
-// Fallback mock data used when no data source is configured
+interface StripeAccount {
+  id: string;
+  name: string;
+  key: string;
+}
+
+// ---------------------------------------------------------------------------
+// Fallback mock data (used when STRIPE_ACCOUNTS env var is not set)
+// ---------------------------------------------------------------------------
 const MOCK_DATA: VampRow[] = [
   {
     statement_descriptor: "PDFBILLING.COM",
@@ -91,101 +101,161 @@ const MOCK_DATA: VampRow[] = [
   },
 ];
 
-export async function GET() {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-  // Primary: read from Supabase vamp_cache table
-  if (supabaseUrl && supabaseKey) {
+/** Report period: 1st of current month to now (matches n8n workflow logic) */
+function getReportPeriod() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+  const since = Math.floor(start.getTime() / 1000);
+  const until = Math.floor(now.getTime() / 1000);
+  const reportMonth = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-01`;
+  return { since, until, reportMonth };
+}
+
+/** Paginate through a Stripe list endpoint and return all items. */
+async function stripeFetch(url: string, key: string, maxPages = 10): Promise<unknown[]> {
+  const items: unknown[] = [];
+  let after: string | null = null;
+
+  for (let p = 0; p < maxPages; p++) {
+    const fullUrl = after ? `${url}&starting_after=${after}` : url;
     try {
-      const res = await fetch(
-        `${supabaseUrl}/rest/v1/vamp_cache?select=*&order=vamp_ratio.desc`,
-        {
-          headers: {
-            apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`,
-            "Content-Type": "application/json",
-          },
-          next: { revalidate: 300 },
-        }
-      );
-
-      if (!res.ok) throw new Error(`Supabase returned ${res.status}`);
-
+      const r = await fetch(fullUrl, {
+        headers: { Authorization: `Bearer ${key}` },
+        cache: "no-store",
+      });
+      if (!r.ok) break;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data: any[] = await res.json();
-      const rows: VampRow[] = data.map((item) => ({
-        statement_descriptor: item.statement_descriptor ?? "",
-        report_month: item.report_month ?? "",
-        as_of: item.as_of ?? "",
-        product_name: item.product_name ?? "",
-        disputes_count: Number(item.disputes_count ?? 0),
-        efw_count: Number(item.efw_count ?? 0),
-        vamp_count: Number(item.vamp_count ?? 0),
-        vamp_ratio: parseFloat(item.vamp_ratio ?? 0),
-        dispute_volume: parseFloat(item.dispute_volume ?? 0),
-        efw_volume: parseFloat(item.efw_volume ?? 0),
-        vamp_volume: parseFloat(item.vamp_volume ?? 0),
-        status: item.status ?? "ACTIVE",
-      }));
-
-      return NextResponse.json(rows);
-    } catch (err) {
-      console.error("Failed to fetch from Supabase:", err);
-      return NextResponse.json(
-        { error: "Failed to fetch VAMP data" },
-        { status: 502 }
-      );
+      const body: any = await r.json();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const page: any[] = body.data || [];
+      items.push(...page);
+      if (!body.has_more || page.length === 0) break;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      after = (page[page.length - 1] as any).id;
+    } catch {
+      break;
     }
   }
 
-  // Fallback: n8n webhook
-  const webhookUrl = process.env.N8N_WEBHOOK_URL;
-  if (!webhookUrl) {
-    return NextResponse.json(MOCK_DATA);
-  }
+  return items;
+}
 
+/** Extract the statement descriptor from a charge object. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function descFromCharge(charge: any): string {
+  if (!charge || typeof charge === "string") return "UNKNOWN";
+  const raw = charge.statement_descriptor || charge.calculated_statement_descriptor || "";
+  return (raw as string).toUpperCase().trim() || "UNKNOWN";
+}
+
+/** Fetch all VAMP data for one Stripe account and return a single aggregated row. */
+async function fetchAccount(
+  acc: StripeAccount,
+  since: number,
+  until: number
+): Promise<VampRow | null> {
   try {
-    const res = await fetch(webhookUrl, {
-      headers: { Accept: "application/json" },
-      next: { revalidate: 300 },
-    });
+    const q = `created[gte]=${since}&created[lte]=${until}&limit=100`;
 
-    if (!res.ok) throw new Error(`n8n webhook returned ${res.status}`);
+    // All three calls run in parallel
+    const [disputes, efws, charges] = await Promise.all([
+      stripeFetch(`https://api.stripe.com/v1/disputes?${q}`, acc.key),
+      stripeFetch(`https://api.stripe.com/v1/radar/early_fraud_warnings?${q}`, acc.key),
+      // 3 pages = up to 300 charges (sufficient for Visa CNP count approximation)
+      stripeFetch(`https://api.stripe.com/v1/charges?${q}`, acc.key, 3),
+    ]);
 
-    const data = await res.json();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows: VampRow[] = (Array.isArray(data) ? data : [data]).map((item: any) => ({
-      statement_descriptor: item["Statement Descriptor"] ?? item.statement_descriptor ?? "",
-      report_month: item["Report Month"] ?? item.report_month ?? "",
-      as_of: item["As Of"] ?? item.as_of ?? "",
-      product_name: item["Product Name"] ?? item.product_name ?? "",
-      disputes_count: Number(item["Disputes Count"] ?? item.disputes_count ?? 0),
-      efw_count: Number(item["EFW Count"] ?? item.efw_count ?? 0),
-      vamp_count: Number(item["VAMP Count"] ?? item.vamp_count ?? 0),
-      vamp_ratio: parseVampRatio(item["VAMP Ratio"] ?? item.vamp_ratio),
-      dispute_volume: Number(item["Dispute Volume ($)"] ?? item.dispute_volume ?? 0),
-      efw_volume: Number(item["EFW Volume ($)"] ?? item.efw_volume ?? 0),
-      vamp_volume: Number(item["VAMP Volume ($)"] ?? item.vamp_volume ?? 0),
-      status: item["Status"] ?? item.status ?? "",
-    }));
+    // Count Visa charges and find the most-used statement descriptor
+    const descCounts: Record<string, number> = {};
+    let visaCount = 0;
 
-    return NextResponse.json(rows);
+    for (const c of charges) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const charge = c as any;
+      const brand = (charge.payment_method_details?.card?.brand || "").toLowerCase();
+      if (brand === "visa") {
+        const desc = descFromCharge(charge);
+        descCounts[desc] = (descCounts[desc] || 0) + 1;
+        visaCount++;
+      }
+    }
+
+    const primaryDesc =
+      Object.entries(descCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ??
+      acc.name.toUpperCase();
+
+    const disputeVol =
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      disputes.reduce((s, d) => s + (((d as any).amount as number) || 0), 0) / 100;
+
+    const vampCount = disputes.length + efws.length;
+    const vampRatio = visaCount > 0 ? vampCount / visaCount : 0;
+
+    return {
+      statement_descriptor: primaryDesc,
+      product_name: acc.name,
+      report_month: "",
+      as_of: "",
+      disputes_count: disputes.length,
+      efw_count: efws.length,
+      vamp_count: vampCount,
+      vamp_ratio: vampRatio,
+      dispute_volume: disputeVol,
+      efw_volume: 0,
+      vamp_volume: disputeVol,
+      status: "ACTIVE",
+    };
   } catch (err) {
-    console.error("Failed to fetch from n8n webhook:", err);
-    return NextResponse.json(
-      { error: "Failed to fetch VAMP data" },
-      { status: 502 }
-    );
+    console.error(`[vamp] Failed to fetch account ${acc.name}:`, err);
+    return null;
   }
 }
 
-function parseVampRatio(raw: unknown): number {
-  if (typeof raw === "number") return raw;
-  if (typeof raw === "string") {
-    const cleaned = raw.replace("%", "").trim();
-    const n = parseFloat(cleaned);
-    return isNaN(n) ? 0 : n / 100;
+// ---------------------------------------------------------------------------
+// Route handler
+// ---------------------------------------------------------------------------
+
+export async function GET() {
+  const accountsJson = process.env.STRIPE_ACCOUNTS;
+
+  if (!accountsJson) {
+    return NextResponse.json(MOCK_DATA);
   }
-  return 0;
+
+  let accounts: StripeAccount[];
+  try {
+    accounts = JSON.parse(accountsJson);
+  } catch {
+    return NextResponse.json(
+      { error: "STRIPE_ACCOUNTS env var is not valid JSON" },
+      { status: 500 }
+    );
+  }
+
+  const { since, until, reportMonth } = getReportPeriod();
+  const asOf = new Date().toISOString().split("T")[0];
+
+  // Fetch all accounts fully in parallel
+  const settled = await Promise.allSettled(
+    accounts.map((acc) => fetchAccount(acc, since, until))
+  );
+
+  const rows: VampRow[] = settled
+    .filter(
+      (r): r is PromiseFulfilledResult<VampRow> =>
+        r.status === "fulfilled" && r.value !== null
+    )
+    .map((r) => ({
+      ...r.value,
+      report_month: reportMonth,
+      as_of: asOf,
+    }));
+
+  rows.sort((a, b) => b.vamp_ratio - a.vamp_ratio);
+
+  return NextResponse.json(rows);
 }
