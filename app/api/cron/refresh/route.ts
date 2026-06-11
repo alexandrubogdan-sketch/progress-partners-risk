@@ -1,20 +1,46 @@
 import { NextRequest, NextResponse } from "next/server";
-import { put } from "@vercel/blob";
+import { put, list } from "@vercel/blob";
 import { buildSnapshot, parseAccounts } from "@/lib/vamp";
+import type { Snapshot } from "@/lib/vamp";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // seconds
 
 const SNAPSHOT_PATH = "vamp/latest.json";
+const STALE_MS = 30 * 60 * 1000; // unauthenticated refresh allowed if older
 
-export async function GET(req: NextRequest) {
-  // Vercel Cron sends Authorization: Bearer <CRON_SECRET>.
-  // Manual refresh: GET /api/cron/refresh?secret=<CRON_SECRET>
+async function isAuthorized(req: NextRequest): Promise<boolean> {
+  // 1. Explicit secret (Vercel Cron sends Authorization: Bearer <CRON_SECRET>;
+  //    manual: /api/cron/refresh?secret=<CRON_SECRET>)
   const secret = process.env.CRON_SECRET;
   const auth = req.headers.get("authorization");
   const qsSecret = req.nextUrl.searchParams.get("secret");
-  if (!secret || (auth !== `Bearer ${secret}` && qsSecret !== secret)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (secret && (auth === `Bearer ${secret}` || qsSecret === secret)) {
+    return true;
+  }
+  // 2. Vercel Cron system header (stripped from external requests by Vercel,
+  //    so it cannot be spoofed)
+  if (req.headers.get("x-vercel-cron")) return true;
+  // 3. No snapshot yet, or snapshot stale -> allow a bootstrap/manual refresh.
+  //    Once fresh, this endpoint locks again, so it cannot be hammered.
+  try {
+    const { blobs } = await list({ prefix: SNAPSHOT_PATH, limit: 1 });
+    if (blobs.length === 0) return true;
+    const res = await fetch(blobs[0].url, { cache: "no-store" });
+    if (!res.ok) return true;
+    const snap: Snapshot = await res.json();
+    return Date.now() - new Date(snap.generated_at).getTime() > STALE_MS;
+  } catch {
+    return true;
+  }
+}
+
+export async function GET(req: NextRequest) {
+  if (!(await isAuthorized(req))) {
+    return NextResponse.json(
+      { error: "Unauthorized — snapshot is fresh. Use CRON_SECRET to force a refresh." },
+      { status: 401 }
+    );
   }
 
   try {
