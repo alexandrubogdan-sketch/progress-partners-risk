@@ -236,9 +236,56 @@ export async function buildSnapshot(
   };
 }
 
+const KEY_RE = /^(rk|sk)_(live|test)_/;
+
+/**
+ * Tolerant STRIPE_ACCOUNTS parser. Accepts:
+ *  - {"Account Name":"rk_live_...", ...}                    (map)
+ *  - [{"name":"Account","key":"rk_live_..."}, ...]          (array of objects,
+ *    key field may be name/account/label + key/token/apiKey/secret)
+ *  - [{"Account":"rk_live_..."}, ...]                       (array of one-entry maps)
+ */
 export function parseAccounts(): { name: string; key: string }[] {
   const raw = process.env.STRIPE_ACCOUNTS;
   if (!raw) throw new Error("STRIPE_ACCOUNTS env var not set");
-  const obj = JSON.parse(raw) as Record<string, string>;
-  return Object.entries(obj).map(([name, key]) => ({ name, key }));
+  const data = JSON.parse(raw) as unknown;
+  const out: { name: string; key: string }[] = [];
+
+  const pushFromObject = (item: Record<string, unknown>, idx: number) => {
+    const strings = Object.entries(item).filter(
+      (e): e is [string, string] => typeof e[1] === "string"
+    );
+    const keyEntry = strings.find(([, v]) => KEY_RE.test(v.trim()));
+    if (!keyEntry) return;
+    const named =
+      strings.find(([k, v]) => !KEY_RE.test(v.trim()) &&
+        ["name", "account", "account_name", "label", "title"].includes(k.toLowerCase()));
+    const otherString = strings.find(([, v]) => !KEY_RE.test(v.trim()));
+    const name =
+      named?.[1] ??
+      (keyEntry[0] && !["key", "token", "api_key", "apikey", "secret", "value"].includes(keyEntry[0].toLowerCase())
+        ? keyEntry[0]
+        : otherString?.[1]) ??
+      `Account ${idx + 1}`;
+    out.push({ name: String(name).trim(), key: keyEntry[1].trim() });
+  };
+
+  if (Array.isArray(data)) {
+    data.forEach((item, idx) => {
+      if (item && typeof item === "object") {
+        pushFromObject(item as Record<string, unknown>, idx);
+      }
+    });
+  } else if (data && typeof data === "object") {
+    for (const [name, key] of Object.entries(data as Record<string, unknown>)) {
+      if (typeof key === "string" && KEY_RE.test(key.trim())) {
+        out.push({ name: name.trim(), key: key.trim() });
+      }
+    }
+  }
+
+  if (out.length === 0) {
+    throw new Error("STRIPE_ACCOUNTS parsed but contained no rk_/sk_ keys");
+  }
+  return out;
 }
