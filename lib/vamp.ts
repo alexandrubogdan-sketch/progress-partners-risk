@@ -1,5 +1,6 @@
 import {
   listAll,
+  forEachPage,
   StripeCharge,
   StripeDispute,
   StripeEFW,
@@ -91,18 +92,6 @@ export async function fetchAccountVamp(
   try {
     const created = { "created[gte]": fromUnix, "created[lte]": toUnix };
 
-    const [charges, disputes, efws] = await Promise.all([
-      listAll<StripeCharge>(key, "/charges", { ...created }),
-      listAll<StripeDispute>(key, "/disputes", {
-        ...created,
-        "expand[]": ["data.charge"],
-      }),
-      listAll<StripeEFW>(key, "/radar/early_fraud_warnings", {
-        ...created,
-        "expand[]": ["data.charge"],
-      }),
-    ]);
-
     const buckets = new Map<string, Bucket>();
     const bucket = (desc: string): Bucket => {
       let b = buckets.get(desc);
@@ -113,14 +102,44 @@ export async function fetchAccountVamp(
       return b;
     };
 
-    // Sales: succeeded Visa charges, grouped by descriptor
-    for (const c of charges) {
-      if (c.status !== "succeeded") continue;
-      if (!isVisa(c)) continue;
-      const b = bucket(descriptorOf(c, accountName));
-      b.sales_count += 1;
-      b.sales_volume += c.amount;
+    // Charges are fetched in parallel one-day windows (big accounts would
+    // otherwise exceed the function budget on sequential pagination), and
+    // streamed page-by-page into the buckets to keep memory flat.
+    const DAY = 86_400;
+    const windows: [number, number][] = [];
+    for (let t = fromUnix; t <= toUnix; t += DAY) {
+      windows.push([t, Math.min(t + DAY - 1, toUnix)]);
     }
+    const chargesTask = Promise.all(
+      windows.map(([wFrom, wTo]) =>
+        forEachPage<StripeCharge>(
+          key,
+          "/charges",
+          { "created[gte]": wFrom, "created[lte]": wTo },
+          (items) => {
+            for (const c of items) {
+              if (c.status !== "succeeded") continue;
+              if (!isVisa(c)) continue;
+              const b = bucket(descriptorOf(c, accountName));
+              b.sales_count += 1;
+              b.sales_volume += c.amount;
+            }
+          }
+        )
+      )
+    );
+
+    const [disputes, efws] = await Promise.all([
+      listAll<StripeDispute>(key, "/disputes", {
+        ...created,
+        "expand[]": ["data.charge"],
+      }),
+      listAll<StripeEFW>(key, "/radar/early_fraud_warnings", {
+        ...created,
+        "expand[]": ["data.charge"],
+      }),
+    ]);
+    await chargesTask;
 
     // Disputes on Visa charges (all reasons — VAMP counts fraud + non-fraud)
     for (const d of disputes) {
