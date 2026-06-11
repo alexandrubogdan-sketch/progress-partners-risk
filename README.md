@@ -37,3 +37,5 @@ No n8n, no Supabase.
 cp .env.local.example .env.local   # fill in values
 npm install && npm run dev
 ```
+
+<!-- redeploy: tolerant STRIPE_ACCOUNTS parser + refresh unlock -->
