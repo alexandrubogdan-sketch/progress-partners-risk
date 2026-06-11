@@ -20,51 +20,49 @@ const pctFmt = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
-function StatusBadge({ status }: { status: string }) {
-  const base = "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium";
-  const upper = status.toUpperCase().replace(/[^A-Z]/g, "");
+function StatusBadge({ vampCount, vampRatio }: { vampCount: number; vampRatio: number }) {
+  const base = "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap";
+  const countBreached = vampCount > 1000;
+  const ratioBreached = vampRatio > 0.015;
+  const breaches = (countBreached ? 1 : 0) + (ratioBreached ? 1 : 0);
 
-  if (upper.includes("ACTIVE")) {
+  if (breaches === 2) {
     return (
-      <span className={`${base} bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300`}>
-        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block" />
-        Active
+      <span className={`${base} bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300`}>
+        <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block shrink-0" />
+        Breach 2/2
       </span>
     );
   }
-  if (upper.includes("CRITICAL") || upper.includes("HIGH")) {
+  if (breaches === 1) {
     return (
-      <span className={`${base} bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300`}>
-        <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />
-        {status.replace(/[^a-zA-Z\s]/g, "").trim() || "Critical"}
+      <span className={`${base} bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300`}>
+        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block shrink-0" />
+        Breach 1/2
       </span>
     );
   }
   return (
-    <span className={`${base} bg-gray-100 text-gray-700 dark:bg-white/10 dark:text-gray-300`}>
-      {status.replace(/[^a-zA-Z\s]/g, "").trim() || status}
+    <span className={`${base} bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300`}>
+      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block shrink-0" />
+      Below Threshold
     </span>
   );
 }
 
-function VampRatioBar({ ratio }: { ratio: number }) {
-  const pct = Math.min(ratio * 100, 100);
-  const color =
-    pct >= 15
+function VampRatioDot({ ratio }: { ratio: number }) {
+  const pct = ratio * 100;
+  const dotColor =
+    pct > 1.5
       ? "bg-red-500"
-      : pct >= 8
+      : pct > 0.9
       ? "bg-amber-500"
       : "bg-emerald-500";
 
   return (
     <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 rounded-full bg-gray-alpha-400 min-w-[48px]">
-        <div
-          className={`h-full rounded-full ${color}`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className="tabular-nums text-xs text-gray-900 w-14 text-right">
+      <span className={`w-2 h-2 rounded-full inline-block shrink-0 ${dotColor}`} />
+      <span className="tabular-nums text-xs text-gray-900">
         {pctFmt.format(ratio)}
       </span>
     </div>
@@ -376,11 +374,11 @@ export default function Dashboard() {
                     <Table.Cell className="tabular-nums">
                       {row.efw_count.toLocaleString()}
                     </Table.Cell>
-                    <Table.Cell className="tabular-nums">
+                    <Table.Cell className={`tabular-nums font-medium ${row.vamp_count > 1000 ? "text-red-500 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
                       {row.vamp_count.toLocaleString()}
                     </Table.Cell>
                     <Table.Cell>
-                      <VampRatioBar ratio={row.vamp_ratio} />
+                      <VampRatioDot ratio={row.vamp_ratio} />
                     </Table.Cell>
                     <Table.Cell className="tabular-nums text-right">
                       {currencyFmt.format(row.dispute_volume)}
@@ -389,7 +387,7 @@ export default function Dashboard() {
                       {currencyFmt.format(row.vamp_volume)}
                     </Table.Cell>
                     <Table.Cell className="text-right">
-                      <StatusBadge status={row.status} />
+                      <StatusBadge vampCount={row.vamp_count} vampRatio={row.vamp_ratio} />
                     </Table.Cell>
                   </Table.Row>
                 ))}
