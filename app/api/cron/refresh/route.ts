@@ -29,6 +29,8 @@ async function isAuthorized(req: NextRequest): Promise<boolean> {
     const res = await fetch(blobs[0].url, { cache: "no-store" });
     if (!res.ok) return true;
     const snap: Snapshot = await res.json();
+    // Empty/broken snapshots don't lock the endpoint
+    if (!snap.rows || snap.rows.length === 0 || snap.accounts_ok === 0) return true;
     return Date.now() - new Date(snap.generated_at).getTime() > STALE_MS;
   } catch {
     return true;
