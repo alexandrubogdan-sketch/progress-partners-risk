@@ -77,3 +77,26 @@ export async function listAll<T extends { id: string }>(
   }
   return out;
 }
+
+/** Stream pages through a handler instead of accumulating (memory-safe for
+ *  very large charge lists). */
+export async function forEachPage<T extends { id: string }>(
+  key: string,
+  path: string,
+  params: Record<string, string | number | string[]>,
+  onPage: (items: T[]) => void,
+  maxPages = 1000
+): Promise<void> {
+  let startingAfter: string | undefined;
+  for (let page = 0; page < maxPages; page++) {
+    const p: Record<string, string | number | string[]> = {
+      ...params,
+      limit: 100,
+    };
+    if (startingAfter) p.starting_after = startingAfter;
+    const res = await stripeGet<T>(key, path, p);
+    onPage(res.data);
+    if (!res.has_more || res.data.length === 0) break;
+    startingAfter = res.data[res.data.length - 1].id;
+  }
+}
