@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --ds-gray-900: hsla(0, 0%, 40%, 1);
+    --ds-gray-1000: hsla(0, 0%, 9%, 1);
+    --ds-gray-alpha-400: hsla(0, 0%, 0%, 0.08);
+    --ds-background-100: hsla(0, 0%, 100%, 1);
+    --ds-background-200: hsla(0, 0%, 98%, 1);
+    --ds-background: hsla(0, 0%, 100%, 1);
+  }
+  .dark {
+    --ds-gray-900: hsla(0, 0%, 63%, 1);
+    --ds-gray-1000: hsla(0, 0%, 93%, 1);
+    --ds-gray-alpha-400: hsla(0, 0%, 100%, 0.14);
+    --ds-background-100: hsla(0, 0%, 4%, 1);
+    --ds-background-200: hsla(0, 0%, 0%, 1);
+    --ds-background: hsla(0, 0%, 4%, 1);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    @apply bg-[var(--ds-background)] text-[var(--ds-gray-1000)];
+    font-family: Inter, system-ui, -apple-system, sans-serif;
+  }
+}

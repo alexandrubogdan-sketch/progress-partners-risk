@@ -1,0 +1,469 @@
+"use client";
+
+import React, { useEffect, useState, useMemo } from "react";
+import { Table } from "@/components/ui/table";
+import { ShowMore } from "@/components/ui/show-more";
+import type { VampRow } from "@/app/api/vamp/route";
+
+const PAGE_SIZE = 25;
+
+const currencyFmt = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  maximumFractionDigits: 0,
+});
+
+const pctFmt = new Intl.NumberFormat("en-US", {
+  style: "percent",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+function StatusBadge({ status }: { status: string }) {
+  const base = "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium";
+  const upper = status.toUpperCase().replace(/[^A-Z]/g, "");
+
+  if (upper.includes("ACTIVE")) {
+    return (
+      <span className={`${base} bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300`}>
+        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block" />
+        Active
+      </span>
+    );
+  }
+  if (upper.includes("CRITICAL") || upper.includes("HIGH")) {
+    return (
+      <span className={`${base} bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300`}>
+        <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />
+        {status.replace(/[^a-zA-Z\s]/g, "").trim() || "Critical"}
+      </span>
+    );
+  }
+  return (
+    <span className={`${base} bg-gray-100 text-gray-700 dark:bg-white/10 dark:text-gray-300`}>
+      {status.replace(/[^a-zA-Z\s]/g, "").trim() || status}
+    </span>
+  );
+}
+
+function VampRatioBar({ ratio }: { ratio: number }) {
+  const pct = Math.min(ratio * 100, 100);
+  const color =
+    pct >= 15
+      ? "bg-red-500"
+      : pct >= 8
+      ? "bg-amber-500"
+      : "bg-emerald-500";
+
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-1.5 rounded-full bg-gray-alpha-400 min-w-[48px]">
+        <div
+          className={`h-full rounded-full ${color}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="tabular-nums text-xs text-gray-900 w-14 text-right">
+        {pctFmt.format(ratio)}
+      </span>
+    </div>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      className="text-gray-900"
+    >
+      <path
+        d="M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10ZM14 14l-3-3"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function RefreshIcon({ spinning }: { spinning: boolean }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      className={`text-gray-900 transition-transform ${spinning ? "animate-spin" : ""}`}
+    >
+      <path
+        d="M13.5 8A5.5 5.5 0 1 1 8 2.5a5.48 5.48 0 0 1 3.9 1.6L13.5 5.6"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M13.5 2.5v3h-3"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export default function Dashboard() {
+  const [rows, setRows] = useState<VampRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  async function loadData() {
+    try {
+      setRefreshing(true);
+      const res = await fetch("/api/vamp");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: VampRow[] = await res.json();
+      // Sort by VAMP ratio descending
+      data.sort((a, b) => b.vamp_ratio - a.vamp_ratio);
+      setRows(data);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load data");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return rows;
+    const q = search.toLowerCase();
+    return rows.filter((r) =>
+      [
+        r.statement_descriptor,
+        r.product_name,
+        r.report_month,
+        r.as_of,
+        r.status,
+        String(r.disputes_count),
+        String(r.efw_count),
+        String(r.vamp_count),
+        pctFmt.format(r.vamp_ratio),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [rows, search]);
+
+  const visible = expanded ? filtered : filtered.slice(0, PAGE_SIZE);
+
+  const asOfDate =
+    rows.length > 0
+      ? new Date(rows[0].as_of).toLocaleDateString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        })
+      : null;
+
+  const reportMonth =
+    rows.length > 0
+      ? new Date(rows[0].report_month).toLocaleDateString("en-GB", {
+          month: "long",
+          year: "numeric",
+        })
+      : null;
+
+  return (
+    <div className="min-h-screen bg-[var(--ds-background-200)]">
+      {/* Header */}
+      <header className="bg-background-100 border-b border-gray-alpha-400 sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            {/* Logo mark */}
+            <div className="w-7 h-7 rounded-md bg-gray-1000 flex items-center justify-center shrink-0">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M8 2L2 5.5V10.5L8 14L14 10.5V5.5L8 2Z"
+                  stroke="white"
+                  strokeWidth="1.2"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M8 2V14M2 5.5L14 10.5M14 5.5L2 10.5"
+                  stroke="white"
+                  strokeWidth="1.2"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </div>
+            <span className="font-semibold text-sm text-gray-1000 tracking-tight">
+              Progress Partners Risk
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-gray-900">
+            {reportMonth && (
+              <span className="hidden sm:inline">
+                Report month: <strong className="text-gray-1000">{reportMonth}</strong>
+              </span>
+            )}
+            {asOfDate && (
+              <>
+                <span className="hidden sm:inline text-gray-alpha-400">·</span>
+                <span className="hidden sm:inline">
+                  As of <strong className="text-gray-1000">{asOfDate}</strong>
+                </span>
+              </>
+            )}
+            <button
+              onClick={loadData}
+              disabled={refreshing}
+              className="ml-2 p-1.5 rounded-md hover:bg-background-200 transition-colors"
+              title="Refresh data"
+            >
+              <RefreshIcon spinning={refreshing} />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main content */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+        {/* Page title + stats */}
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold text-gray-1000 mb-1">
+            VAMP Risk Monitor
+          </h1>
+          <p className="text-sm text-gray-900">
+            Visa Acquirer Monitoring Program — fraud dispute ratios by statement
+            descriptor.
+          </p>
+        </div>
+
+        {/* Stat cards */}
+        {!loading && !error && rows.length > 0 && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+            <StatCard
+              label="Total Descriptors"
+              value={rows.length.toString()}
+            />
+            <StatCard
+              label="High Risk (≥15%)"
+              value={rows
+                .filter((r) => r.vamp_ratio >= 0.15)
+                .length.toString()}
+              highlight
+            />
+            <StatCard
+              label="Total Disputes"
+              value={rows
+                .reduce((s, r) => s + r.disputes_count, 0)
+                .toLocaleString()}
+            />
+            <StatCard
+              label="Total VAMP Volume"
+              value={currencyFmt.format(
+                rows.reduce((s, r) => s + r.vamp_volume, 0)
+              )}
+            />
+          </div>
+        )}
+
+        {/* Search bar */}
+        <div className="relative mb-4">
+          <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
+            <SearchIcon />
+          </div>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setExpanded(false);
+            }}
+            placeholder="Search by descriptor, product, status, ratio…"
+            className="w-full h-10 pl-9 pr-4 text-sm rounded-lg border border-gray-alpha-400 bg-background-100 text-gray-1000 placeholder:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-1000/20 transition-shadow"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-900 hover:text-gray-1000"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+
+        {/* Result count when searching */}
+        {search && (
+          <p className="text-xs text-gray-900 mb-3">
+            {filtered.length === 0
+              ? "No results"
+              : `${filtered.length} result${filtered.length !== 1 ? "s" : ""} for "${search}"`}
+          </p>
+        )}
+
+        {/* Table */}
+        {loading ? (
+          <div className="flex items-center justify-center h-48 text-gray-900 text-sm">
+            Loading data…
+          </div>
+        ) : error ? (
+          <div className="flex items-center justify-center h-48 text-red-500 text-sm">
+            {error}
+          </div>
+        ) : (
+          <div className="relative">
+            <Table>
+              <Table.Colgroup>
+                <Table.Col className="w-[22%]" />
+                <Table.Col className="w-[10%]" />
+                <Table.Col className="w-[7%]" />
+                <Table.Col className="w-[7%]" />
+                <Table.Col className="w-[7%]" />
+                <Table.Col className="w-[16%]" />
+                <Table.Col className="w-[12%]" />
+                <Table.Col className="w-[12%]" />
+                <Table.Col className="w-[7%]" />
+              </Table.Colgroup>
+
+              <Table.Header>
+                <Table.Row>
+                  <Table.Head>Statement Descriptor</Table.Head>
+                  <Table.Head>Product</Table.Head>
+                  <Table.Head>Disputes</Table.Head>
+                  <Table.Head>EFWs</Table.Head>
+                  <Table.Head>VAMP Count</Table.Head>
+                  <Table.Head>VAMP Ratio</Table.Head>
+                  <Table.Head>Dispute Vol.</Table.Head>
+                  <Table.Head>VAMP Vol.</Table.Head>
+                  <Table.Head>Status</Table.Head>
+                </Table.Row>
+              </Table.Header>
+
+              <Table.Body interactive striped>
+                {visible.map((row, i) => (
+                  <Table.Row key={`${row.statement_descriptor}-${i}`}>
+                    <Table.Cell>
+                      <span className="font-mono text-xs">
+                        {row.statement_descriptor}
+                      </span>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-background-200 border border-gray-alpha-400 text-gray-1000">
+                        {row.product_name}
+                      </span>
+                    </Table.Cell>
+                    <Table.Cell className="tabular-nums">
+                      {row.disputes_count.toLocaleString()}
+                    </Table.Cell>
+                    <Table.Cell className="tabular-nums">
+                      {row.efw_count.toLocaleString()}
+                    </Table.Cell>
+                    <Table.Cell className="tabular-nums">
+                      {row.vamp_count.toLocaleString()}
+                    </Table.Cell>
+                    <Table.Cell>
+                      <VampRatioBar ratio={row.vamp_ratio} />
+                    </Table.Cell>
+                    <Table.Cell className="tabular-nums text-right">
+                      {currencyFmt.format(row.dispute_volume)}
+                    </Table.Cell>
+                    <Table.Cell className="tabular-nums text-right">
+                      {currencyFmt.format(row.vamp_volume)}
+                    </Table.Cell>
+                    <Table.Cell className="text-right">
+                      <StatusBadge status={row.status} />
+                    </Table.Cell>
+                  </Table.Row>
+                ))}
+              </Table.Body>
+
+              {!search && (
+                <Table.Footer>
+                  <Table.Row>
+                    <Table.Cell
+                      className="text-gray-1000 font-medium"
+                      colSpan={6}
+                    >
+                      Totals ({rows.length} descriptors)
+                    </Table.Cell>
+                    <Table.Cell className="text-gray-1000 font-medium tabular-nums text-right">
+                      {currencyFmt.format(
+                        rows.reduce((s, r) => s + r.dispute_volume, 0)
+                      )}
+                    </Table.Cell>
+                    <Table.Cell className="text-gray-1000 font-medium tabular-nums text-right">
+                      {currencyFmt.format(
+                        rows.reduce((s, r) => s + r.vamp_volume, 0)
+                      )}
+                    </Table.Cell>
+                    <Table.Cell />
+                  </Table.Row>
+                </Table.Footer>
+              )}
+            </Table>
+
+            {/* Show more / less */}
+            {filtered.length > PAGE_SIZE && (
+              <>
+                {!expanded && (
+                  <div className="pointer-events-none absolute bottom-12 left-0 h-20 w-full rounded-b-lg bg-gradient-to-t from-[var(--ds-background-200)] to-transparent" />
+                )}
+                <div className="h-4" />
+                <ShowMore
+                  expanded={expanded}
+                  onClick={setExpanded}
+                  className="mx-auto"
+                />
+              </>
+            )}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  highlight,
+}: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-lg border p-4 ${
+        highlight
+          ? "border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-900/10"
+          : "border-gray-alpha-400 bg-background-100"
+      }`}
+    >
+      <p className="text-xs text-gray-900 mb-1">{label}</p>
+      <p
+        className={`text-xl font-bold tabular-nums ${
+          highlight ? "text-red-600 dark:text-red-400" : "text-gray-1000"
+        }`}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
