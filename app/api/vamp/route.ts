@@ -190,7 +190,7 @@ async function fetchAccount(
 
     const disputeVol =
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      disputes.reduce((s, d) => s + (((d as any).amount as number) || 0), 0) / 100;
+      disputes.reduce((s: number, d) => s + (((d as any).amount as number) || 0), 0) / 100;
 
     const vampCount = disputes.length + efws.length;
     const vampRatio = visaCount > 0 ? vampCount / visaCount : 0;
