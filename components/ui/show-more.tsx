@@ -5,12 +5,14 @@ interface ShowMoreProps {
   onClick: React.Dispatch<React.SetStateAction<boolean>>;
   noBorder?: boolean;
   className?: string;
+  loading?: boolean;
 }
 
 export const ShowMore = ({
   expanded = false,
   onClick,
   className = "",
+  loading = false,
 }: ShowMoreProps) => {
   return (
     <div
@@ -20,11 +22,16 @@ export const ShowMore = ({
         <button
           type="button"
           className="h-8 px-3 text-sm rounded-[100px] text-gray-1000 font-sans bg-background-100 font-medium border border-gray-alpha-400 duration-150 hover:opacity-80 transition-opacity"
-          onClick={() => onClick(!expanded)}
+          onClick={() => !loading && onClick(!expanded)}
+          disabled={loading}
+          aria-busy={loading}
         >
           <span className="text-nowrap inline-block">
             <div className="flex items-center">
-              Show {expanded ? "Less" : "More"}
+              {loading ? "Loading" : `Show ${expanded ? "Less" : "More"}`}
+              {loading ? (
+                <span className="inline-flex ml-1.5 w-4 h-4 rounded-full border-2 border-gray-alpha-400 border-t-gray-1000 animate-spin" />
+              ) : (
               <span
                 className={`inline-flex ml-1 duration-200${
                   expanded ? " rotate-180" : ""
@@ -44,6 +51,7 @@ export const ShowMore = ({
                   />
                 </svg>
               </span>
+              )}
             </div>
           </span>
         </button>
