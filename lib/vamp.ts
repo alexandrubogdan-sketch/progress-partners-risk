@@ -113,9 +113,14 @@ export async function fetchAccountVamp(
     for (let t = fromUnix; t <= toUnix; t += WINDOW) {
       windows.push([t, Math.min(t + WINDOW - 1, toUnix)]);
     }
-    const chargesTask = Promise.all(
-      windows.map(([wFrom, wTo]) =>
-        forEachPage<StripeCharge>(
+    // Limit concurrent window streams per account to stay under Stripe's
+    // per-account rate limit (429s observed at full fan-out on big accounts)
+    const WINDOW_CONCURRENCY = 10;
+    let wi = 0;
+    const windowWorker = async () => {
+      while (wi < windows.length) {
+        const [wFrom, wTo] = windows[wi++];
+        await forEachPage<StripeCharge>(
           key,
           "/charges",
           { "created[gte]": wFrom, "created[lte]": wTo },
@@ -128,7 +133,13 @@ export async function fetchAccountVamp(
               if (isVisa(c)) b.visa_sales_count += 1;
             }
           }
-        )
+        );
+      }
+    };
+    const chargesTask = Promise.all(
+      Array.from(
+        { length: Math.min(WINDOW_CONCURRENCY, windows.length) },
+        windowWorker
       )
     );
 
