@@ -108,10 +108,10 @@ export async function fetchAccountVamp(
     // Charges are fetched in parallel one-day windows (big accounts would
     // otherwise exceed the function budget on sequential pagination), and
     // streamed page-by-page into the buckets to keep memory flat.
-    const DAY = 86_400;
+    const WINDOW = 28_800; // 8h slices -> more parallel streams for big accounts
     const windows: [number, number][] = [];
-    for (let t = fromUnix; t <= toUnix; t += DAY) {
-      windows.push([t, Math.min(t + DAY - 1, toUnix)]);
+    for (let t = fromUnix; t <= toUnix; t += WINDOW) {
+      windows.push([t, Math.min(t + WINDOW - 1, toUnix)]);
     }
     const chargesTask = Promise.all(
       windows.map(([wFrom, wTo]) =>
