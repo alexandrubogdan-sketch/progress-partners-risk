@@ -50,7 +50,17 @@ export async function GET(req: NextRequest) {
 
   try {
     const accounts = parseAccounts();
-    const prevState = (await readBlobJson<StateMap>(STATE_PATH)) ?? {};
+    let prevState = (await readBlobJson<StateMap>(STATE_PATH)) ?? {};
+    // ?force=1 re-rates every account now (cached charge windows are kept,
+    // so this only refetches the open window + disputes/EFWs).
+    if (req.nextUrl.searchParams.get("force")) {
+      prevState = Object.fromEntries(
+        Object.entries(prevState).map(([k, st]) => [
+          k,
+          { ...st, refreshed_at: new Date(0).toISOString() },
+        ])
+      );
+    }
 
     const blobOpts = {
       access: "public" as const,
