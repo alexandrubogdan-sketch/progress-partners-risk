@@ -8,6 +8,11 @@ import type { VampRow } from "@/lib/vamp";
 
 const PAGE_SIZE = 25;
 
+// A ratio is only meaningful if the descriptor had sales this month.
+// (e.g. a descriptor was renamed: old spelling keeps receiving disputes/EFWs
+// from prior-month charges but has zero current-month sales.)
+const rated = (r: VampRow) => !(r.visa_sales_count === 0 && r.vamp_count > 0);
+
 const currencyFmt = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
@@ -20,8 +25,16 @@ const pctFmt = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
-function StatusBadge({ vampCount, vampRatio }: { vampCount: number; vampRatio: number }) {
+function StatusBadge({ vampCount, vampRatio, noSales }: { vampCount: number; vampRatio: number; noSales?: boolean }) {
   const base = "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap";
+  if (noSales) {
+    return (
+      <span className={`${base} bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400`}>
+        <span className="w-1.5 h-1.5 rounded-full bg-gray-400 inline-block shrink-0" />
+        No Sales
+      </span>
+    );
+  }
   const countBreached = vampCount > 1000;
   const ratioBreached = vampRatio > 0.015;
   const breaches = (countBreached ? 1 : 0) + (ratioBreached ? 1 : 0);
@@ -50,7 +63,15 @@ function StatusBadge({ vampCount, vampRatio }: { vampCount: number; vampRatio: n
   );
 }
 
-function VampRatioDot({ ratio }: { ratio: number }) {
+function VampRatioDot({ ratio, noSales }: { ratio: number; noSales?: boolean }) {
+  if (noSales) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="w-2 h-2 rounded-full inline-block shrink-0 bg-gray-400" />
+        <span className="tabular-nums text-xs text-gray-900">&mdash;</span>
+      </div>
+    );
+  }
   const pct = ratio * 100;
   const dotColor =
     pct > 1.5
@@ -310,26 +331,28 @@ export default function Dashboard() {
             <StatCard
               label="High Risk (≥1.5%)"
               value={rows
-                .filter((r) => r.vamp_ratio >= 0.015)
+                .filter((r) => rated(r) && r.vamp_ratio >= 0.015)
                 .length.toString()}
-              highlight={rows.some((r) => r.vamp_ratio >= 0.015)}
+              highlight={rows.some((r) => rated(r) && r.vamp_ratio >= 0.015)}
             />
             <StatCard
               label="Breach 1/2"
               value={rows
                 .filter(
                   (r) =>
+                    rated(r) &&
                     (r.vamp_count > 1000 ? 1 : 0) +
                       (r.vamp_ratio > 0.015 ? 1 : 0) ===
-                    1
+                      1
                 )
                 .length.toString()}
               highlight={
                 rows.filter(
                   (r) =>
+                    rated(r) &&
                     (r.vamp_count > 1000 ? 1 : 0) +
                       (r.vamp_ratio > 0.015 ? 1 : 0) ===
-                    1
+                      1
                 ).length > 0
               }
             />
@@ -337,11 +360,11 @@ export default function Dashboard() {
               label="Breach 2/2"
               value={rows
                 .filter(
-                  (r) => r.vamp_count > 1000 && r.vamp_ratio > 0.015
+                  (r) => rated(r) && r.vamp_count > 1000 && r.vamp_ratio > 0.015
                 )
                 .length.toString()}
               highlight={rows.some(
-                (r) => r.vamp_count > 1000 && r.vamp_ratio > 0.015
+                (r) => rated(r) && r.vamp_count > 1000 && r.vamp_ratio > 0.015
               )}
             />
             <StatCard
@@ -441,17 +464,17 @@ export default function Dashboard() {
                         {row.statement_descriptor}
                       </span>
                     </Table.Cell>
-                    <Table.Cell className={`tabular-nums font-medium ${row.vamp_count > 1000 ? "text-red-500 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+                    <Table.Cell className={`tabular-nums font-medium ${rated(row) && row.vamp_count > 1000 ? "text-red-500 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
                       {row.vamp_count.toLocaleString()}
                     </Table.Cell>
                     <Table.Cell>
-                      <VampRatioDot ratio={row.vamp_ratio} />
+                      <VampRatioDot ratio={row.vamp_ratio} noSales={!rated(row)} />
                     </Table.Cell>
                     <Table.Cell className="tabular-nums">
                       {row.sales_count.toLocaleString()}
                     </Table.Cell>
                     <Table.Cell className="text-right">
-                      <StatusBadge vampCount={row.vamp_count} vampRatio={row.vamp_ratio} />
+                      <StatusBadge vampCount={row.vamp_count} vampRatio={row.vamp_ratio} noSales={!rated(row)} />
                     </Table.Cell>
                   </Table.Row>
                 ))}
