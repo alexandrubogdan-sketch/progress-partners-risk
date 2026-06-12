@@ -143,6 +143,16 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState(false);
+  const [expanding, setExpanding] = useState(false);
+  // Rendering ~50k rows blocks the main thread for a few seconds; paint a
+  // spinner first, then expand on the next tick so the user sees feedback.
+  const toggleExpanded: React.Dispatch<React.SetStateAction<boolean>> = (v) => {
+    setExpanding(true);
+    setTimeout(() => {
+      setExpanded(v);
+      setExpanding(false);
+    }, 50);
+  };
   const [refreshing, setRefreshing] = useState(false);
   const [meta, setMeta] = useState<{
     generated_at?: string;
@@ -511,7 +521,8 @@ export default function Dashboard() {
                 <div className="h-4" />
                 <ShowMore
                   expanded={expanded}
-                  onClick={setExpanded}
+                  onClick={toggleExpanded}
+                  loading={expanding}
                   className="mx-auto"
                 />
               </>
