@@ -230,7 +230,7 @@ export async function fetchAccountVamp(
 export type AccountState = AccountResult & { refreshed_at: string };
 export type StateMap = Record<string, AccountState>;
 
-const REFRESH_IF_OLDER_MS = 20 * 60 * 1000; // don't redo accounts done <20min ago
+const REFRESH_IF_OLDER_MS = 6 * 60 * 60 * 1000; // don't redo accounts done <6h ago (cron is daily)
 
 /**
  * Incremental snapshot builder. Processes accounts that are missing, errored,
