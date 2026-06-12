@@ -125,7 +125,7 @@ export async function fetchAccountVamp(
         }
         const [wFrom, wTo] = pending[wi++];
         const agg: Record<string, DescAgg> = {};
-        await forEachPage<StripeCharge>(
+        const finished = await forEachPage<StripeCharge>(
           key,
           "/charges",
           { "created[gte]": wFrom, "created[lte]": wTo },
@@ -138,8 +138,14 @@ export async function fetchAccountVamp(
               a.v += c.amount;
               if (isVisa(c)) a.vs += 1;
             }
-          }
+          },
+          1000,
+          deadline - 15_000
         );
+        if (!finished) {
+          incomplete = true; // window partially fetched: discard, retry next run
+          return;
+        }
         done[String(wFrom)] = agg;
       }
     };
@@ -150,7 +156,7 @@ export async function fetchAccountVamp(
       )
     );
 
-    if (incomplete) {
+    if (incomplete || deadline - Date.now() < 30_000) {
       return {
         account: accountName,
         ok: false,
@@ -278,7 +284,8 @@ export async function buildSnapshotIncremental(
   accounts: { name: string; key: string }[],
   prevState: StateMap,
   deadline: number,
-  concurrency = 10
+  concurrency = 10,
+  onProgress?: (state: StateMap) => Promise<void>
 ): Promise<{ state: StateMap; snapshot: Snapshot; refreshed: number; remaining: number }> {
   const now = new Date();
   const monthStart = new Date(
@@ -341,6 +348,11 @@ export async function buildSnapshotIncremental(
           : state[a.name]?.refreshed_at ?? new Date(0).toISOString(),
       };
       if (res.ok) refreshed++;
+      if (onProgress) {
+        try {
+          await onProgress(state); // bank progress in case the run is killed
+        } catch {}
+      }
     }
   }
   await Promise.all(
