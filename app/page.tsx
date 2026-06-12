@@ -298,35 +298,66 @@ export default function Dashboard() {
 
         {/* Stat cards */}
         {!loading && !error && rows.length > 0 && (
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
             <StatCard
-              label="Total Descriptors"
-              value={rows.length.toString()}
+              label="Total Accounts"
+              value={`${meta.accounts_ok ?? 0}/${meta.accounts_total ?? 0}`}
             />
             <StatCard
-              label="Total Sales"
-              value={rows
-                .reduce((s, r) => s + r.sales_count, 0)
-                .toLocaleString()}
+              label="Total Descriptors"
+              value={rows.length.toLocaleString()}
             />
             <StatCard
               label="High Risk (≥1.5%)"
               value={rows
                 .filter((r) => r.vamp_ratio >= 0.015)
                 .length.toString()}
-              highlight
+              highlight={rows.some((r) => r.vamp_ratio >= 0.015)}
             />
             <StatCard
-              label="Total Disputes"
+              label="Breach 1/2"
               value={rows
-                .reduce((s, r) => s + r.disputes_count, 0)
-                .toLocaleString()}
+                .filter(
+                  (r) =>
+                    (r.vamp_count > 1000 ? 1 : 0) +
+                      (r.vamp_ratio > 0.015 ? 1 : 0) ===
+                    1
+                )
+                .length.toString()}
+              highlight={
+                rows.filter(
+                  (r) =>
+                    (r.vamp_count > 1000 ? 1 : 0) +
+                      (r.vamp_ratio > 0.015 ? 1 : 0) ===
+                    1
+                ).length > 0
+              }
             />
             <StatCard
-              label="Total VAMP Volume"
-              value={currencyFmt.format(
-                rows.reduce((s, r) => s + r.vamp_volume, 0)
+              label="Breach 2/2"
+              value={rows
+                .filter(
+                  (r) => r.vamp_count > 1000 && r.vamp_ratio > 0.015
+                )
+                .length.toString()}
+              highlight={rows.some(
+                (r) => r.vamp_count > 1000 && r.vamp_ratio > 0.015
               )}
+            />
+            <StatCard
+              label="Portfolio VAMP"
+              value={pctFmt.format(
+                rows.reduce((s, r) => s + r.visa_sales_count, 0) > 0
+                  ? rows.reduce((s, r) => s + r.vamp_count, 0) /
+                      rows.reduce((s, r) => s + r.visa_sales_count, 0)
+                  : 0
+              )}
+              highlight={
+                rows.reduce((s, r) => s + r.visa_sales_count, 0) > 0 &&
+                rows.reduce((s, r) => s + r.vamp_count, 0) /
+                  rows.reduce((s, r) => s + r.visa_sales_count, 0) >
+                  0.015
+              }
             />
           </div>
         )}
@@ -378,16 +409,13 @@ export default function Dashboard() {
           <div className="relative">
             <Table>
               <Table.Colgroup>
-                <Table.Col className="w-[20%]" />
-                <Table.Col className="w-[10%]" />
-                <Table.Col className="w-[7%]" />
-                <Table.Col className="w-[6%]" />
-                <Table.Col className="w-[6%]" />
-                <Table.Col className="w-[7%]" />
+                <Table.Col className="w-[26%]" />
                 <Table.Col className="w-[13%]" />
+                <Table.Col className="w-[10%]" />
+                <Table.Col className="w-[10%]" />
+                <Table.Col className="w-[14%]" />
+                <Table.Col className="w-[15%]" />
                 <Table.Col className="w-[12%]" />
-                <Table.Col className="w-[12%]" />
-                <Table.Col className="w-[7%]" />
               </Table.Colgroup>
 
               <Table.Header>
@@ -395,11 +423,8 @@ export default function Dashboard() {
                   <Table.Head>Statement Descriptor</Table.Head>
                   <Table.Head>Account</Table.Head>
                   <Table.Head>Sales</Table.Head>
-                  <Table.Head>Disputes</Table.Head>
-                  <Table.Head>EFWs</Table.Head>
                   <Table.Head>VAMP Count</Table.Head>
                   <Table.Head>VAMP Ratio</Table.Head>
-                  <Table.Head>Dispute Vol.</Table.Head>
                   <Table.Head>VAMP Vol.</Table.Head>
                   <Table.Head>Status</Table.Head>
                 </Table.Row>
@@ -421,20 +446,11 @@ export default function Dashboard() {
                     <Table.Cell className="tabular-nums">
                       {row.sales_count.toLocaleString()}
                     </Table.Cell>
-                    <Table.Cell className="tabular-nums">
-                      {row.disputes_count.toLocaleString()}
-                    </Table.Cell>
-                    <Table.Cell className="tabular-nums">
-                      {row.efw_count.toLocaleString()}
-                    </Table.Cell>
                     <Table.Cell className={`tabular-nums font-medium ${row.vamp_count > 1000 ? "text-red-500 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
                       {row.vamp_count.toLocaleString()}
                     </Table.Cell>
                     <Table.Cell>
                       <VampRatioDot ratio={row.vamp_ratio} />
-                    </Table.Cell>
-                    <Table.Cell className="tabular-nums text-right">
-                      {currencyFmt.format(row.dispute_volume)}
                     </Table.Cell>
                     <Table.Cell className="tabular-nums text-right">
                       {currencyFmt.format(row.vamp_volume)}
@@ -451,15 +467,17 @@ export default function Dashboard() {
                   <Table.Row>
                     <Table.Cell
                       className="text-gray-1000 font-medium"
-                      colSpan={7}
+                      colSpan={2}
                     >
                       Totals ({rows.length} descriptors)
                     </Table.Cell>
-                    <Table.Cell className="text-gray-1000 font-medium tabular-nums text-right">
-                      {currencyFmt.format(
-                        rows.reduce((s, r) => s + r.dispute_volume, 0)
-                      )}
+                    <Table.Cell className="text-gray-1000 font-medium tabular-nums">
+                      {rows.reduce((s, r) => s + r.sales_count, 0).toLocaleString()}
                     </Table.Cell>
+                    <Table.Cell className="text-gray-1000 font-medium tabular-nums">
+                      {rows.reduce((s, r) => s + r.vamp_count, 0).toLocaleString()}
+                    </Table.Cell>
+                    <Table.Cell />
                     <Table.Cell className="text-gray-1000 font-medium tabular-nums text-right">
                       {currencyFmt.format(
                         rows.reduce((s, r) => s + r.vamp_volume, 0)
