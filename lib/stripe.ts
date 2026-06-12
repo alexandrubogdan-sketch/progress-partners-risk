@@ -52,8 +52,10 @@ async function stripeGet<T>(
     });
     if (res.ok) return res.json();
     // Back off and retry on rate limits / transient server errors
-    if ((res.status === 429 || res.status >= 500) && attempt < 6) {
-      await new Promise((r) => setTimeout(r, 400 * 2 ** attempt));
+    if ((res.status === 429 || res.status >= 500) && attempt < 8) {
+      const retryAfter = Number(res.headers.get("retry-after")) || 0;
+      const backoff = Math.max(retryAfter * 1000, 500 * 2 ** Math.min(attempt, 5));
+      await new Promise((r) => setTimeout(r, backoff + Math.random() * 250));
       continue;
     }
     const body = await res.text();
