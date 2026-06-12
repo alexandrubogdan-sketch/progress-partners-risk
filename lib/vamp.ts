@@ -13,8 +13,9 @@ export type VampRow = {
   report_month: string; // YYYY-MM-01
   as_of: string; // ISO date of the data window end
   product_name: string; // kept for UI compat = account_name
-  sales_count: number;
+  sales_count: number; // all card brands, succeeded
   sales_volume: number;
+  visa_sales_count: number; // VAMP denominator
   disputes_count: number;
   efw_count: number;
   vamp_count: number; // |EFW charges ∪ disputed charges| (deduped)
@@ -62,6 +63,7 @@ function descriptorOf(charge: StripeCharge, fallback: string): string {
 type Bucket = {
   sales_count: number;
   sales_volume: number;
+  visa_sales_count: number;
   disputes_count: number;
   dispute_volume: number;
   efw_count: number;
@@ -73,6 +75,7 @@ function emptyBucket(): Bucket {
   return {
     sales_count: 0,
     sales_volume: 0,
+    visa_sales_count: 0,
     disputes_count: 0,
     dispute_volume: 0,
     efw_count: 0,
@@ -119,10 +122,10 @@ export async function fetchAccountVamp(
           (items) => {
             for (const c of items) {
               if (c.status !== "succeeded") continue;
-              if (!isVisa(c)) continue;
               const b = bucket(descriptorOf(c, accountName));
               b.sales_count += 1;
               b.sales_volume += c.amount;
+              if (isVisa(c)) b.visa_sales_count += 1;
             }
           }
         )
@@ -167,7 +170,7 @@ export async function fetchAccountVamp(
       const vampCount = b.vampCharges.size;
       let vampVolume = 0;
       b.vampCharges.forEach((amt) => (vampVolume += amt));
-      const ratio = b.sales_count > 0 ? vampCount / b.sales_count : 0;
+      const ratio = b.visa_sales_count > 0 ? vampCount / b.visa_sales_count : 0;
       rows.push({
         id: 0, // assigned after merge
         account_name: accountName,
@@ -177,6 +180,7 @@ export async function fetchAccountVamp(
         product_name: accountName,
         sales_count: b.sales_count,
         sales_volume: b.sales_volume / 100,
+        visa_sales_count: b.visa_sales_count,
         disputes_count: b.disputes_count,
         dispute_volume: b.dispute_volume / 100,
         efw_count: b.efw_count,
