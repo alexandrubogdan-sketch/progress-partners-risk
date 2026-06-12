@@ -409,23 +409,21 @@ export default function Dashboard() {
           <div className="relative">
             <Table>
               <Table.Colgroup>
-                <Table.Col className="w-[26%]" />
-                <Table.Col className="w-[13%]" />
-                <Table.Col className="w-[10%]" />
-                <Table.Col className="w-[10%]" />
                 <Table.Col className="w-[14%]" />
-                <Table.Col className="w-[15%]" />
+                <Table.Col className="w-[30%]" />
                 <Table.Col className="w-[12%]" />
+                <Table.Col className="w-[14%]" />
+                <Table.Col className="w-[14%]" />
+                <Table.Col className="w-[16%]" />
               </Table.Colgroup>
 
               <Table.Header>
                 <Table.Row>
-                  <Table.Head>Statement Descriptor</Table.Head>
                   <Table.Head>Account</Table.Head>
-                  <Table.Head>Sales</Table.Head>
+                  <Table.Head>Statement Descriptor</Table.Head>
                   <Table.Head>VAMP Count</Table.Head>
                   <Table.Head>VAMP Ratio</Table.Head>
-                  <Table.Head>VAMP Vol.</Table.Head>
+                  <Table.Head>Sales</Table.Head>
                   <Table.Head>Status</Table.Head>
                 </Table.Row>
               </Table.Header>
@@ -434,17 +432,14 @@ export default function Dashboard() {
                 {visible.map((row, i) => (
                   <Table.Row key={`${row.statement_descriptor}-${i}`}>
                     <Table.Cell>
-                      <span className="font-mono text-xs">
-                        {row.statement_descriptor}
-                      </span>
-                    </Table.Cell>
-                    <Table.Cell>
                       <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-background-200 border border-gray-alpha-400 text-gray-1000">
                         {row.account_name}
                       </span>
                     </Table.Cell>
-                    <Table.Cell className="tabular-nums">
-                      {row.sales_count.toLocaleString()}
+                    <Table.Cell>
+                      <span className="font-mono text-xs">
+                        {row.statement_descriptor}
+                      </span>
                     </Table.Cell>
                     <Table.Cell className={`tabular-nums font-medium ${row.vamp_count > 1000 ? "text-red-500 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
                       {row.vamp_count.toLocaleString()}
@@ -452,8 +447,8 @@ export default function Dashboard() {
                     <Table.Cell>
                       <VampRatioDot ratio={row.vamp_ratio} />
                     </Table.Cell>
-                    <Table.Cell className="tabular-nums text-right">
-                      {currencyFmt.format(row.vamp_volume)}
+                    <Table.Cell className="tabular-nums">
+                      {row.sales_count.toLocaleString()}
                     </Table.Cell>
                     <Table.Cell className="text-right">
                       <StatusBadge vampCount={row.vamp_count} vampRatio={row.vamp_ratio} />
@@ -472,16 +467,11 @@ export default function Dashboard() {
                       Totals ({rows.length} descriptors)
                     </Table.Cell>
                     <Table.Cell className="text-gray-1000 font-medium tabular-nums">
-                      {rows.reduce((s, r) => s + r.sales_count, 0).toLocaleString()}
-                    </Table.Cell>
-                    <Table.Cell className="text-gray-1000 font-medium tabular-nums">
                       {rows.reduce((s, r) => s + r.vamp_count, 0).toLocaleString()}
                     </Table.Cell>
                     <Table.Cell />
-                    <Table.Cell className="text-gray-1000 font-medium tabular-nums text-right">
-                      {currencyFmt.format(
-                        rows.reduce((s, r) => s + r.vamp_volume, 0)
-                      )}
+                    <Table.Cell className="text-gray-1000 font-medium tabular-nums">
+                      {rows.reduce((s, r) => s + r.sales_count, 0).toLocaleString()}
                     </Table.Cell>
                     <Table.Cell />
                   </Table.Row>
