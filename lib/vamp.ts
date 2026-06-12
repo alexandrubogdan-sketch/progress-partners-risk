@@ -132,6 +132,10 @@ export async function fetchAccountVamp(
       )
     );
 
+    // Prevent an unhandled rejection (and a crashed function) if disputes/EFW
+    // fail before chargesTask is awaited
+    chargesTask.catch(() => {});
+
     const [disputes, efws] = await Promise.all([
       listAll<StripeDispute>(key, "/disputes", {
         ...created,
