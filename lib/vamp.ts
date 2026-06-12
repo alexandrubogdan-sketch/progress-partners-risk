@@ -222,15 +222,12 @@ export async function fetchAccountVamp(
       const vampCount = b.vampCharges.size;
       let vampVolume = 0;
       b.vampCharges.forEach((amt) => (vampVolume += amt));
-      // Cap at 100% — a descriptor can't exceed all of its own sales
-      const ratio = Math.min(
-        1,
-        b.visa_sales_count > 0
-          ? vampCount / b.visa_sales_count
-          : vampCount > 0
-          ? 1
-          : 0
-      );
+      // Cap at 100% — a descriptor can't exceed all of its own sales.
+      // No sales this month -> ratio is not meaningful (0 + "no_sales" status).
+      const noSales = b.visa_sales_count === 0 && vampCount > 0;
+      const ratio = b.visa_sales_count > 0
+        ? Math.min(1, vampCount / b.visa_sales_count)
+        : 0;
       rows.push({
         id: 0, // assigned after merge
         account_name: accountName,
@@ -248,12 +245,13 @@ export async function fetchAccountVamp(
         vamp_count: vampCount,
         vamp_volume: vampVolume / 100,
         vamp_ratio: ratio,
-        status:
-          ratio > 0.015 || vampCount > 1000
-            ? "breach"
-            : ratio > 0.009
-            ? "warning"
-            : "ok",
+        status: noSales
+          ? "no_sales"
+          : ratio > 0.015 || vampCount > 1000
+          ? "breach"
+          : ratio > 0.009
+          ? "warning"
+          : "ok",
         refreshed_at: refreshedAt,
       });
     }
