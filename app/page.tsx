@@ -2,11 +2,10 @@
 
 import React, { useEffect, useState, useMemo } from "react";
 import { Table } from "@/components/ui/table";
-import { ShowMore } from "@/components/ui/show-more";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import type { VampRow } from "@/lib/vamp";
 
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 50;
 
 // A ratio is only meaningful if the descriptor had sales this month.
 // (e.g. a descriptor was renamed: old spelling keeps receiving disputes/EFWs
@@ -142,17 +141,11 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [expanded, setExpanded] = useState(false);
-  const [expanding, setExpanding] = useState(false);
-  // Rendering ~50k rows blocks the main thread for a few seconds; paint a
-  // spinner first, then expand on the next tick so the user sees feedback.
-  const toggleExpanded: React.Dispatch<React.SetStateAction<boolean>> = (v) => {
-    setExpanding(true);
-    setTimeout(() => {
-      setExpanded(v);
-      setExpanding(false);
-    }, 50);
-  };
+  // Infinite scroll: render PAGE_SIZE rows, load PAGE_SIZE more whenever the
+  // spinner sentinel at the bottom of the table scrolls into view.
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const sentinelRef = React.useRef<HTMLDivElement | null>(null);
+  const loadingMoreRef = React.useRef(false);
   const [refreshing, setRefreshing] = useState(false);
   const [meta, setMeta] = useState<{
     generated_at?: string;
@@ -229,7 +222,25 @@ export default function Dashboard() {
     );
   }, [rows, search]);
 
-  const visible = expanded ? filtered : filtered.slice(0, PAGE_SIZE);
+  const visible = filtered.slice(0, visibleCount);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (!entries[0].isIntersecting || loadingMoreRef.current) return;
+        loadingMoreRef.current = true;
+        setTimeout(() => {
+          setVisibleCount((c) => Math.min(c + PAGE_SIZE, filtered.length));
+          loadingMoreRef.current = false;
+        }, 150);
+      },
+      { rootMargin: "300px" }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [filtered.length, visibleCount]);
 
   const asOfDate =
     meta.generated_at || rows.length > 0
@@ -405,7 +416,7 @@ export default function Dashboard() {
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
-              setExpanded(false);
+              setVisibleCount(PAGE_SIZE);
             }}
             placeholder="Search by descriptor, account, status, ratio…"
             className="w-full h-10 pl-9 pr-4 text-sm rounded-lg border border-gray-alpha-400 bg-background-100 text-gray-1000 placeholder:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-1000/20 transition-shadow"
@@ -512,20 +523,16 @@ export default function Dashboard() {
               )}
             </Table>
 
-            {/* Show more / less */}
-            {filtered.length > PAGE_SIZE && (
-              <>
-                {!expanded && (
-                  <div className="pointer-events-none absolute bottom-12 left-0 h-20 w-full rounded-b-lg bg-gradient-to-t from-[var(--ds-background-200)] to-transparent" />
-                )}
-                <div className="h-4" />
-                <ShowMore
-                  expanded={expanded}
-                  onClick={toggleExpanded}
-                  loading={expanding}
-                  className="mx-auto"
-                />
-              </>
+            {/* Infinite scroll sentinel */}
+            {visibleCount < filtered.length && (
+              <div
+                ref={sentinelRef}
+                className="flex items-center justify-center gap-2 py-6 text-sm text-gray-900"
+              >
+                <span className="inline-flex w-4 h-4 rounded-full border-2 border-gray-alpha-400 border-t-gray-1000 animate-spin" />
+                Loading more&hellip; ({visible.length.toLocaleString()} of{" "}
+                {filtered.length.toLocaleString()})
+              </div>
             )}
           </div>
         )}
