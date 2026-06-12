@@ -19,7 +19,7 @@ export type VampRow = {
   disputes_count: number;
   efw_count: number;
   vamp_count: number; // |EFW charges ∪ disputed charges| (deduped)
-  vamp_ratio: number; // vamp_count / sales_count
+  vamp_ratio: number; // vamp_count / visa_sales_count, capped at 1
   dispute_volume: number;
   efw_volume: number;
   vamp_volume: number;
@@ -27,11 +27,16 @@ export type VampRow = {
   refreshed_at: string;
 };
 
+export type DescAgg = { s: number; v: number; vs: number }; // sales, volume(cents), visa sales
+
 export type AccountResult = {
   account: string;
   ok: boolean;
   error?: string;
   rows: VampRow[];
+  // Per-window charge aggregates; lets a huge account resume across runs and
+  // makes daily refreshes incremental (closed windows never change).
+  charge_windows?: Record<string, Record<string, DescAgg>>;
 };
 
 export type Snapshot = {
@@ -90,36 +95,36 @@ export async function fetchAccountVamp(
   fromUnix: number,
   toUnix: number,
   reportMonth: string,
-  asOf: string
+  asOf: string,
+  prevWindows: Record<string, Record<string, DescAgg>> = {},
+  deadline: number = Date.now() + 600_000
 ): Promise<AccountResult> {
   try {
     const created = { "created[gte]": fromUnix, "created[lte]": toUnix };
 
-    const buckets = new Map<string, Bucket>();
-    const bucket = (desc: string): Bucket => {
-      let b = buckets.get(desc);
-      if (!b) {
-        b = emptyBucket();
-        buckets.set(desc, b);
-      }
-      return b;
-    };
-
-    // Charges are fetched in parallel one-day windows (big accounts would
-    // otherwise exceed the function budget on sequential pagination), and
-    // streamed page-by-page into the buckets to keep memory flat.
-    const WINDOW = 28_800; // 8h slices -> more parallel streams for big accounts
+    // 8h windows; closed windows are cached across runs, the open (current)
+    // window is always re-fetched.
+    const WINDOW = 28_800;
     const windows: [number, number][] = [];
     for (let t = fromUnix; t <= toUnix; t += WINDOW) {
       windows.push([t, Math.min(t + WINDOW - 1, toUnix)]);
     }
-    // Limit concurrent window streams per account to stay under Stripe's
-    // per-account rate limit (429s observed at full fan-out on big accounts)
+    const done: Record<string, Record<string, DescAgg>> = { ...prevWindows };
+    const pending = windows.filter(
+      ([wf, wt]) => !(String(wf) in done) || wt >= toUnix // open window: redo
+    );
+
     const WINDOW_CONCURRENCY = 3; // gentle: some accounts have low rate limits
     let wi = 0;
+    let incomplete = false;
     const windowWorker = async () => {
-      while (wi < windows.length) {
-        const [wFrom, wTo] = windows[wi++];
+      while (wi < pending.length) {
+        if (deadline - Date.now() < 25_000) {
+          incomplete = true;
+          return;
+        }
+        const [wFrom, wTo] = pending[wi++];
+        const agg: Record<string, DescAgg> = {};
         await forEachPage<StripeCharge>(
           key,
           "/charges",
@@ -127,25 +132,33 @@ export async function fetchAccountVamp(
           (items) => {
             for (const c of items) {
               if (c.status !== "succeeded") continue;
-              const b = bucket(descriptorOf(c, accountName));
-              b.sales_count += 1;
-              b.sales_volume += c.amount;
-              if (isVisa(c)) b.visa_sales_count += 1;
+              const d = descriptorOf(c, accountName);
+              const a = (agg[d] ??= { s: 0, v: 0, vs: 0 });
+              a.s += 1;
+              a.v += c.amount;
+              if (isVisa(c)) a.vs += 1;
             }
           }
         );
+        done[String(wFrom)] = agg;
       }
     };
-    const chargesTask = Promise.all(
+    await Promise.all(
       Array.from(
-        { length: Math.min(WINDOW_CONCURRENCY, windows.length) },
+        { length: Math.min(WINDOW_CONCURRENCY, Math.max(pending.length, 1)) },
         windowWorker
       )
     );
 
-    // Prevent an unhandled rejection (and a crashed function) if disputes/EFW
-    // fail before chargesTask is awaited
-    chargesTask.catch(() => {});
+    if (incomplete) {
+      return {
+        account: accountName,
+        ok: false,
+        error: `partial: ${Object.keys(done).length}/${windows.length} windows fetched — continues next run`,
+        rows: [],
+        charge_windows: done,
+      };
+    }
 
     const [disputes, efws] = await Promise.all([
       listAll<StripeDispute>(key, "/disputes", {
@@ -157,7 +170,25 @@ export async function fetchAccountVamp(
         "expand[]": ["data.charge"],
       }),
     ]);
-    await chargesTask;
+
+    const buckets = new Map<string, Bucket>();
+    const bucket = (desc: string): Bucket => {
+      let b = buckets.get(desc);
+      if (!b) {
+        b = emptyBucket();
+        buckets.set(desc, b);
+      }
+      return b;
+    };
+
+    for (const aggMap of Object.values(done)) {
+      for (const [d, a] of Object.entries(aggMap)) {
+        const b = bucket(d);
+        b.sales_count += a.s;
+        b.sales_volume += a.v;
+        b.visa_sales_count += a.vs;
+      }
+    }
 
     // Disputes on Visa charges (all reasons — VAMP counts fraud + non-fraud)
     for (const d of disputes) {
@@ -188,7 +219,11 @@ export async function fetchAccountVamp(
       // Cap at 100% — a descriptor can't exceed all of its own sales
       const ratio = Math.min(
         1,
-        b.visa_sales_count > 0 ? vampCount / b.visa_sales_count : vampCount > 0 ? 1 : 0
+        b.visa_sales_count > 0
+          ? vampCount / b.visa_sales_count
+          : vampCount > 0
+          ? 1
+          : 0
       );
       rows.push({
         id: 0, // assigned after merge
@@ -216,13 +251,14 @@ export async function fetchAccountVamp(
         refreshed_at: refreshedAt,
       });
     }
-    return { account: accountName, ok: true, rows };
+    return { account: accountName, ok: true, rows, charge_windows: done };
   } catch (err) {
     return {
       account: accountName,
       ok: false,
       error: err instanceof Error ? err.message : String(err),
       rows: [],
+      charge_windows: prevWindows,
     };
   }
 }
@@ -234,8 +270,8 @@ const REFRESH_IF_OLDER_MS = 6 * 60 * 60 * 1000; // don't redo accounts done <6h 
 
 /**
  * Incremental snapshot builder. Processes accounts that are missing, errored,
- * or older than 20 minutes, under a time budget so the function never hits
- * Vercel's max duration. Already-fresh accounts are kept from prevState.
+ * or older than 6 hours, under a time budget so the function never hits
+ * Vercel's max duration. Huge accounts resume from cached charge windows.
  * Run it repeatedly until remaining === 0.
  */
 export async function buildSnapshotIncremental(
@@ -278,22 +314,32 @@ export async function buildSnapshotIncremental(
   async function worker() {
     while (i < needs.length) {
       const msLeft = deadline - Date.now();
-      if (msLeft < 15_000) return; // not enough budget to start another account
+      if (msLeft < 30_000) return; // not enough budget to start another account
       const a = needs[i++];
-      const timeout = new Promise<AccountResult>((resolve) =>
-        setTimeout(
-          () => resolve({ account: a.name, ok: false, error: `Timed out after ${Math.round(msLeft / 1000)}s — will retry next run`, rows: [] }),
-          msLeft - 5_000
-        )
+      const prevWin = state[a.name]?.charge_windows ?? {};
+      const res = await fetchAccountVamp(
+        a.name,
+        a.key,
+        fromUnix,
+        toUnix,
+        reportMonth,
+        asOf,
+        prevWin,
+        deadline
       );
-      const res = await Promise.race([
-        fetchAccountVamp(a.name, a.key, fromUnix, toUnix, reportMonth, asOf),
-        timeout,
-      ]);
-      // Keep previous good data if this attempt failed
-      if (res.ok || !state[a.name]?.ok) {
-        state[a.name] = { ...res, refreshed_at: new Date().toISOString() };
-      }
+      // Always keep accumulated window progress; keep previous good rows if
+      // this attempt failed.
+      const hadOk = state[a.name]?.ok ?? false;
+      state[a.name] = {
+        account: a.name,
+        ok: res.ok || hadOk,
+        error: res.ok ? undefined : res.error,
+        rows: res.ok ? res.rows : state[a.name]?.rows ?? [],
+        charge_windows: res.charge_windows ?? prevWin,
+        refreshed_at: res.ok
+          ? new Date().toISOString()
+          : state[a.name]?.refreshed_at ?? new Date(0).toISOString(),
+      };
       if (res.ok) refreshed++;
     }
   }
@@ -314,7 +360,7 @@ export async function buildSnapshotIncremental(
     accounts_total: accounts.length,
     accounts_ok: okCount,
     errors: accounts
-      .filter((a) => state[a.name] && !state[a.name].ok)
+      .filter((a) => state[a.name] && !state[a.name].ok && state[a.name].error)
       .map((a) => ({ account: a.name, error: state[a.name].error || "unknown" })),
     rows,
   };
