@@ -93,10 +93,12 @@ export async function forEachPage<T extends { id: string }>(
   path: string,
   params: Record<string, string | number | string[]>,
   onPage: (items: T[]) => void,
-  maxPages = 1000
-): Promise<void> {
+  maxPages = 1000,
+  deadline?: number
+): Promise<boolean> {
   let startingAfter: string | undefined;
   for (let page = 0; page < maxPages; page++) {
+    if (deadline && Date.now() > deadline) return false; // out of time
     const p: Record<string, string | number | string[]> = {
       ...params,
       limit: 100,
@@ -107,4 +109,5 @@ export async function forEachPage<T extends { id: string }>(
     if (!res.has_more || res.data.length === 0) break;
     startingAfter = res.data[res.data.length - 1].id;
   }
+  return true;
 }
