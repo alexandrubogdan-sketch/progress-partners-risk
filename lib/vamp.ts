@@ -115,7 +115,7 @@ export async function fetchAccountVamp(
     }
     // Limit concurrent window streams per account to stay under Stripe's
     // per-account rate limit (429s observed at full fan-out on big accounts)
-    const WINDOW_CONCURRENCY = 10;
+    const WINDOW_CONCURRENCY = 3; // gentle: some accounts have low rate limits
     let wi = 0;
     const windowWorker = async () => {
       while (wi < windows.length) {
