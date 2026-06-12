@@ -137,7 +137,7 @@ export default function Dashboard() {
       const body = await res.json();
       if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
       const data: VampRow[] = body.rows ?? [];
-      data.sort((a, b) => b.vamp_ratio - a.vamp_ratio);
+      data.sort((a, b) => b.vamp_count - a.vamp_count || b.vamp_ratio - a.vamp_ratio);
       setRows(data);
       setMeta({
         generated_at: body.generated_at,
