@@ -7,9 +7,9 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 800; // seconds (Pro plan)
 
 const SNAPSHOT_PATH = "vamp/latest.json";
-const STATE_PATH = "vamp/state-v3.json"; // v3: ratios capped at 100%
+const STATE_PATH = "vamp/state-v2.json";
 const STALE_MS = 30 * 60 * 1000;
-const BUDGET_MS = 720_000; // stop starting new work after 12 min
+const BUDGET_MS = 660_000; // stop new work after 11 min (800s hard kill)
 
 async function readBlobJson<T>(path: string): Promise<T | null> {
   try {
@@ -52,9 +52,6 @@ export async function GET(req: NextRequest) {
     const accounts = parseAccounts();
     const prevState = (await readBlobJson<StateMap>(STATE_PATH)) ?? {};
 
-    const { state, snapshot, refreshed, remaining } =
-      await buildSnapshotIncremental(accounts, prevState, deadline);
-
     const blobOpts = {
       access: "public" as const,
       contentType: "application/json",
@@ -62,6 +59,11 @@ export async function GET(req: NextRequest) {
       allowOverwrite: true,
       cacheControlMaxAge: 0,
     };
+
+    const { state, snapshot, refreshed, remaining } =
+      await buildSnapshotIncremental(accounts, prevState, deadline, 10, async (st) => {
+        await put(STATE_PATH, JSON.stringify(st), blobOpts);
+      });
     await put(STATE_PATH, JSON.stringify(state), blobOpts);
     await put(SNAPSHOT_PATH, JSON.stringify(snapshot), blobOpts);
 
