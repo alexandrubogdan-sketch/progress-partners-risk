@@ -225,22 +225,29 @@ export default function Dashboard() {
   const visible = filtered.slice(0, visibleCount);
 
   useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
-    const obs = new IntersectionObserver(
-      (entries) => {
-        if (!entries[0].isIntersecting || loadingMoreRef.current) return;
+    const check = () => {
+      if (loadingMoreRef.current) return;
+      const el = sentinelRef.current;
+      if (!el) return;
+      // Load the next batch when the sentinel is within 300px of the viewport
+      if (el.getBoundingClientRect().top < window.innerHeight + 300) {
         loadingMoreRef.current = true;
         setTimeout(() => {
           setVisibleCount((c) => Math.min(c + PAGE_SIZE, filtered.length));
           loadingMoreRef.current = false;
         }, 150);
-      },
-      { rootMargin: "300px" }
-    );
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [filtered.length, visibleCount]);
+      }
+    };
+    window.addEventListener("scroll", check, { passive: true });
+    window.addEventListener("resize", check);
+    const iv = setInterval(check, 400); // safety net (e.g. short pages)
+    check();
+    return () => {
+      window.removeEventListener("scroll", check);
+      window.removeEventListener("resize", check);
+      clearInterval(iv);
+    };
+  }, [filtered.length]);
 
   const asOfDate =
     meta.generated_at || rows.length > 0
