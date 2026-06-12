@@ -65,7 +65,16 @@ function descriptorOf(charge: StripeCharge, fallback: string): string {
   ).trim();
 }
 
+// Merge descriptor variants that differ only in punctuation/spacing
+// (e.g. "INFOCHECK-HELP.COM" vs "INFOCHECKHELP.COM" after a mid-month
+// rename are the same merchant; Visa rates them together).
+function normDesc(d: string): string {
+  const n = d.replace(/[^a-z0-9]/gi, "").toUpperCase();
+  return n || d.toUpperCase();
+}
+
 type Bucket = {
+  nameSales: Record<string, number>; // raw spelling -> sales (pick display name)
   sales_count: number;
   sales_volume: number;
   visa_sales_count: number;
@@ -78,6 +87,7 @@ type Bucket = {
 
 function emptyBucket(): Bucket {
   return {
+    nameSales: {},
     sales_count: 0,
     sales_volume: 0,
     visa_sales_count: 0,
@@ -189,7 +199,8 @@ export async function fetchAccountVamp(
 
     for (const aggMap of Object.values(done)) {
       for (const [d, a] of Object.entries(aggMap)) {
-        const b = bucket(d);
+        const b = bucket(normDesc(d));
+        b.nameSales[d] = (b.nameSales[d] ?? 0) + a.s;
         b.sales_count += a.s;
         b.sales_volume += a.v;
         b.visa_sales_count += a.vs;
@@ -200,7 +211,9 @@ export async function fetchAccountVamp(
     for (const d of disputes) {
       const ch = d.charge;
       if (!ch || typeof ch === "string" || !isVisa(ch)) continue;
-      const b = bucket(descriptorOf(ch, accountName));
+      const raw = descriptorOf(ch, accountName);
+      const b = bucket(normDesc(raw));
+      b.nameSales[raw] = b.nameSales[raw] ?? 0;
       b.disputes_count += 1;
       b.dispute_volume += d.amount;
       b.vampCharges.set(ch.id, ch.amount);
@@ -210,7 +223,9 @@ export async function fetchAccountVamp(
     for (const e of efws) {
       const ch = e.charge;
       if (!ch || typeof ch === "string" || !isVisa(ch)) continue;
-      const b = bucket(descriptorOf(ch, accountName));
+      const raw = descriptorOf(ch, accountName);
+      const b = bucket(normDesc(raw));
+      b.nameSales[raw] = b.nameSales[raw] ?? 0;
       b.efw_count += 1;
       b.efw_volume += ch.amount;
       b.vampCharges.set(ch.id, ch.amount); // dedup: same charge counted once
@@ -228,10 +243,14 @@ export async function fetchAccountVamp(
       const ratio = b.visa_sales_count > 0
         ? Math.min(1, vampCount / b.visa_sales_count)
         : 0;
+      // Display under the spelling that carries the sales (most recent/active)
+      const names = Object.entries(b.nameSales);
+      names.sort((x, y) => y[1] - x[1]);
+      const displayDesc = names.length > 0 ? names[0][0] : desc;
       rows.push({
         id: 0, // assigned after merge
         account_name: accountName,
-        statement_descriptor: desc,
+        statement_descriptor: displayDesc,
         report_month: reportMonth,
         as_of: asOf,
         product_name: accountName,
