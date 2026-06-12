@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300; // seconds
 
 const SNAPSHOT_PATH = "vamp/latest.json";
-const STATE_PATH = "vamp/state.json";
+const STATE_PATH = "vamp/state-v2.json";
 const STALE_MS = 30 * 60 * 1000;
 const BUDGET_MS = 240_000; // stop starting new work after 4 min
 
