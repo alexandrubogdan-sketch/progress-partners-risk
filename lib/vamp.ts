@@ -174,7 +174,11 @@ export async function fetchAccountVamp(
       const vampCount = b.vampCharges.size;
       let vampVolume = 0;
       b.vampCharges.forEach((amt) => (vampVolume += amt));
-      const ratio = b.visa_sales_count > 0 ? vampCount / b.visa_sales_count : 0;
+      // Cap at 100% — a descriptor can't exceed all of its own sales
+      const ratio = Math.min(
+        1,
+        b.visa_sales_count > 0 ? vampCount / b.visa_sales_count : vampCount > 0 ? 1 : 0
+      );
       rows.push({
         id: 0, // assigned after merge
         account_name: accountName,
@@ -287,7 +291,8 @@ export async function buildSnapshotIncremental(
   );
 
   const rows = Object.values(state).flatMap((r) => r.rows);
-  rows.sort((a, b) => b.vamp_ratio - a.vamp_ratio);
+  // Highest VAMP count first; ratio as tie-breaker
+  rows.sort((a, b) => b.vamp_count - a.vamp_count || b.vamp_ratio - a.vamp_ratio);
   rows.forEach((r, idx) => (r.id = idx + 1));
 
   const okCount = accounts.filter((a) => state[a.name]?.ok).length;
