@@ -2,21 +2,11 @@
 
 import React, { useEffect, useState, useMemo } from "react";
 import { Table } from "@/components/ui/table";
+import { ShowMore } from "@/components/ui/show-more";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
-import type { VampRow } from "@/lib/vamp";
+import type { VampRow } from "@/app/api/vamp/route";
 
-const PAGE_SIZE = 50;
-
-// A ratio is only meaningful if the descriptor had sales this month.
-// (e.g. a descriptor was renamed: old spelling keeps receiving disputes/EFWs
-// from prior-month charges but has zero current-month sales.)
-const rated = (r: VampRow) => !(r.visa_sales_count === 0 && r.vamp_count > 0);
-
-const currencyFmt = new Intl.NumberFormat("en-US", {
-  style: "currency",
-  currency: "USD",
-  maximumFractionDigits: 0,
-});
+const PAGE_SIZE = 25;
 
 const pctFmt = new Intl.NumberFormat("en-US", {
   style: "percent",
@@ -24,66 +14,63 @@ const pctFmt = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
-function StatusBadge({ vampCount, vampRatio, noSales }: { vampCount: number; vampRatio: number; noSales?: boolean }) {
-  const base = "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap";
-  if (noSales) {
-    return (
-      <span className={`${base} bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400`}>
-        <span className="w-1.5 h-1.5 rounded-full bg-gray-400 inline-block shrink-0" />
-        No Sales
-      </span>
-    );
-  }
-  const countBreached = vampCount > 1000;
-  const ratioBreached = vampRatio > 0.015;
-  const breaches = (countBreached ? 1 : 0) + (ratioBreached ? 1 : 0);
+// VAMP thresholds (Visa programme limits)
+const THRESHOLD_RATIO = 0.009;  // 0.9% — Early Warning
+const BREACH_RATIO   = 0.018;  // 1.8% — VAMP breach
+const THRESHOLD_COUNT = 750;
+const BREACH_COUNT    = 1000;
 
-  if (breaches === 2) {
+function statusLevel(row: VampRow): "breach" | "warning" | "ok" {
+  const ratioBreach  = row.vamp_ratio  >= BREACH_RATIO;
+  const countBreach  = row.vamp_count  >= BREACH_COUNT;
+  const ratioWarning = row.vamp_ratio  >= THRESHOLD_RATIO;
+  const countWarning = row.vamp_count  >= THRESHOLD_COUNT;
+  if (ratioBreach || countBreach) return "breach";
+  if (ratioWarning || countWarning) return "warning";
+  return "ok";
+}
+
+function StatusBadge({ row }: { row: VampRow }) {
+  const level = statusLevel(row);
+  const base = "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap";
+  if (level === "breach")
     return (
       <span className={`${base} bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300`}>
         <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block shrink-0" />
-        Breach 2/2
+        Breach
       </span>
     );
-  }
-  if (breaches === 1) {
+  if (level === "warning")
     return (
       <span className={`${base} bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300`}>
         <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block shrink-0" />
-        Breach 1/2
+        Warning
       </span>
     );
-  }
   return (
     <span className={`${base} bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300`}>
       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block shrink-0" />
-      Below Threshold
+      OK
     </span>
   );
 }
 
-function VampRatioDot({ ratio, noSales }: { ratio: number; noSales?: boolean }) {
-  if (noSales) {
-    return (
-      <div className="flex items-center gap-2">
-        <span className="w-2 h-2 rounded-full inline-block shrink-0 bg-gray-400" />
-        <span className="tabular-nums text-xs text-gray-900">&mdash;</span>
-      </div>
-    );
-  }
-  const pct = ratio * 100;
+function VampRatioCell({ row }: { row: VampRow }) {
+  const level = statusLevel(row);
   const dotColor =
-    pct > 1.5
-      ? "bg-red-500"
-      : pct > 0.9
-      ? "bg-amber-500"
-      : "bg-emerald-500";
+    level === "breach" ? "bg-red-500" :
+    level === "warning" ? "bg-amber-500" :
+    "bg-emerald-500";
+  const textColor =
+    level === "breach" ? "text-red-600 dark:text-red-400" :
+    level === "warning" ? "text-amber-600 dark:text-amber-400" :
+    "text-gray-900";
 
   return (
     <div className="flex items-center gap-2">
       <span className={`w-2 h-2 rounded-full inline-block shrink-0 ${dotColor}`} />
-      <span className="tabular-nums text-xs text-gray-900">
-        {pctFmt.format(ratio)}
+      <span className={`tabular-nums text-xs font-medium ${textColor}`}>
+        {pctFmt.format(row.vamp_ratio)}
       </span>
     </div>
   );
@@ -91,47 +78,21 @@ function VampRatioDot({ ratio, noSales }: { ratio: number; noSales?: boolean }) 
 
 function SearchIcon() {
   return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="none"
-      className="text-gray-900"
-    >
-      <path
-        d="M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10ZM14 14l-3-3"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="text-gray-900">
+      <path d="M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10ZM14 14l-3-3"
+        stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
 
 function RefreshIcon({ spinning }: { spinning: boolean }) {
   return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="none"
-      className={`text-gray-900 transition-transform ${spinning ? "animate-spin" : ""}`}
-    >
-      <path
-        d="M13.5 8A5.5 5.5 0 1 1 8 2.5a5.48 5.48 0 0 1 3.9 1.6L13.5 5.6"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M13.5 2.5v3h-3"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+      className={`text-gray-900 transition-transform ${spinning ? "animate-spin" : ""}`}>
+      <path d="M13.5 8A5.5 5.5 0 1 1 8 2.5a5.48 5.48 0 0 1 3.9 1.6L13.5 5.6"
+        stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M13.5 2.5v3h-3"
+        stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -141,34 +102,16 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  // Infinite scroll: render PAGE_SIZE rows, load PAGE_SIZE more whenever the
-  // spinner sentinel at the bottom of the table scrolls into view.
-  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const sentinelRef = React.useRef<HTMLDivElement | null>(null);
-  const loadingMoreRef = React.useRef(false);
+  const [expanded, setExpanded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [meta, setMeta] = useState<{
-    generated_at?: string;
-    accounts_ok?: number;
-    accounts_total?: number;
-    errors: { account: string; error: string }[];
-  }>({ errors: [] });
 
   async function loadData() {
     try {
       setRefreshing(true);
-      const res = await fetch("/api/vamp");
-      const body = await res.json();
-      if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
-      const data: VampRow[] = body.rows ?? [];
-      data.sort((a, b) => b.vamp_count - a.vamp_count || b.vamp_ratio - a.vamp_ratio);
+      const res = await fetch("/api/vamp", { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: VampRow[] = await res.json();
       setRows(data);
-      setMeta({
-        generated_at: body.generated_at,
-        accounts_ok: body.accounts_ok,
-        accounts_total: body.accounts_total,
-        errors: body.errors ?? [],
-      });
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load data");
@@ -178,93 +121,31 @@ export default function Dashboard() {
     }
   }
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  // While data is missing or incomplete: trigger a background refresh batch
-  // (max one per ~4.5 min) and poll for results every 30s. The endpoint only
-  // accepts unauthenticated triggers while data is incomplete/stale.
-  const lastTrigger = React.useRef(0);
-  useEffect(() => {
-    if (loading) return;
-    const incomplete =
-      error !== null ||
-      (meta.accounts_total !== undefined &&
-        (meta.accounts_ok ?? 0) < meta.accounts_total);
-    if (!incomplete) return;
-    if (Date.now() - lastTrigger.current > 270_000) {
-      lastTrigger.current = Date.now();
-      fetch("/api/cron/refresh").catch(() => {});
-    }
-    const t = setTimeout(() => loadData(), 30_000);
-    return () => clearTimeout(t);
-  }, [loading, error, meta]);
+  useEffect(() => { loadData(); }, []);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return rows;
     const q = search.toLowerCase();
     return rows.filter((r) =>
-      [
-        r.statement_descriptor,
-        r.account_name,
-        r.report_month,
-        r.as_of,
-        r.status,
-        String(r.disputes_count),
-        String(r.efw_count),
-        String(r.vamp_count),
-        pctFmt.format(r.vamp_ratio),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(q)
+      [r.statement_descriptor, r.product_name, r.account_id,
+       pctFmt.format(r.vamp_ratio), String(r.vamp_count)]
+        .join(" ").toLowerCase().includes(q)
     );
   }, [rows, search]);
 
-  const visible = filtered.slice(0, visibleCount);
+  const visible = expanded ? filtered : filtered.slice(0, PAGE_SIZE);
 
-  useEffect(() => {
-    const check = () => {
-      if (loadingMoreRef.current) return;
-      const el = sentinelRef.current;
-      if (!el) return;
-      // Load the next batch when the sentinel is within 300px of the viewport
-      if (el.getBoundingClientRect().top < window.innerHeight + 300) {
-        loadingMoreRef.current = true;
-        setTimeout(() => {
-          setVisibleCount((c) => Math.min(c + PAGE_SIZE, filtered.length));
-          loadingMoreRef.current = false;
-        }, 150);
-      }
-    };
-    window.addEventListener("scroll", check, { passive: true });
-    window.addEventListener("resize", check);
-    const iv = setInterval(check, 400); // safety net (e.g. short pages)
-    check();
-    return () => {
-      window.removeEventListener("scroll", check);
-      window.removeEventListener("resize", check);
-      clearInterval(iv);
-    };
-  }, [filtered.length]);
+  const reportLabel = rows[0]
+    ? new Date(rows[0].report_month).toLocaleDateString("en-GB", { month: "long", year: "numeric" })
+    : null;
+  const asOfLabel = rows[0]
+    ? new Date(rows[0].as_of).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
+    : null;
 
-  const asOfDate =
-    meta.generated_at || rows.length > 0
-      ? new Date(meta.generated_at ?? rows[0].as_of).toLocaleDateString("en-GB", {
-          day: "numeric",
-          month: "short",
-          year: "numeric",
-        })
-      : null;
-
-  const reportMonth =
-    rows.length > 0
-      ? new Date(rows[0].report_month).toLocaleDateString("en-GB", {
-          month: "long",
-          year: "numeric",
-        })
-      : null;
+  const breachCount  = rows.filter((r) => statusLevel(r) === "breach").length;
+  const warningCount = rows.filter((r) => statusLevel(r) === "warning").length;
+  const totalEfw     = rows.reduce((s, r) => s + r.efw_count, 0);
+  const totalDisp    = rows.reduce((s, r) => s + r.disputes_count, 0);
 
   return (
     <div className="min-h-screen bg-[var(--ds-background-200)]">
@@ -272,274 +153,173 @@ export default function Dashboard() {
       <header className="bg-background-100 border-b border-gray-alpha-400 sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            {/* Logo mark */}
             <div className="w-7 h-7 rounded-md bg-gray-1000 flex items-center justify-center shrink-0">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path
-                  d="M8 2L2 5.5V10.5L8 14L14 10.5V5.5L8 2Z"
-                  stroke="white"
-                  strokeWidth="1.2"
-                  strokeLinejoin="round"
-                />
-                <path
-                  d="M8 2V14M2 5.5L14 10.5M14 5.5L2 10.5"
-                  stroke="white"
-                  strokeWidth="1.2"
-                  strokeLinecap="round"
-                />
+                <path d="M8 2L2 5.5V10.5L8 14L14 10.5V5.5L8 2Z"
+                  stroke="white" strokeWidth="1.2" strokeLinejoin="round" />
+                <path d="M8 2V14M2 5.5L14 10.5M14 5.5L2 10.5"
+                  stroke="white" strokeWidth="1.2" strokeLinecap="round" />
               </svg>
             </div>
             <span className="font-semibold text-sm text-gray-1000 tracking-tight">
               Progress Partners Risk
             </span>
           </div>
-
           <div className="flex items-center gap-2 text-xs text-gray-900">
-            {reportMonth && (
+            {reportLabel && (
               <span className="hidden sm:inline">
-                Report month: <strong className="text-gray-1000">{reportMonth}</strong>
+                Report: <strong className="text-gray-1000">{reportLabel}</strong>
               </span>
             )}
-            {asOfDate && (
+            {asOfLabel && (
               <>
                 <span className="hidden sm:inline text-gray-alpha-400">·</span>
                 <span className="hidden sm:inline">
-                  As of <strong className="text-gray-1000">{asOfDate}</strong>
+                  As of <strong className="text-gray-1000">{asOfLabel}</strong>
                 </span>
               </>
             )}
             <ThemeToggle />
-            <button
-              onClick={loadData}
-              disabled={refreshing}
-              className="p-1.5 rounded-md hover:bg-background-200 transition-colors"
-              title="Refresh data"
-            >
+            <button onClick={loadData} disabled={refreshing}
+              className="p-1.5 rounded-md hover:bg-background-200 transition-colors" title="Refresh">
               <RefreshIcon spinning={refreshing} />
             </button>
           </div>
         </div>
       </header>
 
-      {/* Main content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
-        {/* Page title + stats */}
         <div className="mb-6">
-          <h1 className="text-2xl font-bold text-gray-1000 mb-1">
-            VAMP Risk Monitor
-          </h1>
+          <h1 className="text-2xl font-bold text-gray-1000 mb-1">VAMP Risk Monitor</h1>
           <p className="text-sm text-gray-900">
-            Visa Acquirer Monitoring Program — fraud dispute ratios by statement
-            descriptor.
+            Visa Acquirer Monitoring Programme — Radar EFW + disputes by descriptor.{" "}
+            <span className="text-amber-600 dark:text-amber-400">
+              Note: counts use Radar EFWs, not Visa TC40; may differ from Stripe dashboard.
+            </span>
           </p>
         </div>
 
-        {/* Account fetch errors */}
-        {meta.errors.length > 0 && (
-          <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-900/40 dark:bg-amber-900/10 p-3 text-xs text-amber-800 dark:text-amber-300">
-            <strong>
-              {meta.errors.length} of {meta.accounts_total} accounts failed to
-              refresh:
-            </strong>{" "}
-            {meta.errors.map((e) => e.account).join(", ")}
-          </div>
-        )}
-
-        {/* Stat cards */}
         {!loading && !error && rows.length > 0 && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-            <StatCard
-              label="Total Accounts"
-              value={`${meta.accounts_ok ?? 0}/${meta.accounts_total ?? 0}`}
-            />
-            <StatCard
-              label="Total Descriptors"
-              value={rows.length.toLocaleString()}
-            />
-            <StatCard
-              label="High Risk (≥1.5%)"
-              value={rows
-                .filter((r) => rated(r) && r.vamp_ratio >= 0.015)
-                .length.toString()}
-              highlight={rows.some((r) => rated(r) && r.vamp_ratio >= 0.015)}
-            />
-            <StatCard
-              label="Breach 1/2"
-              value={rows
-                .filter(
-                  (r) =>
-                    rated(r) &&
-                    (r.vamp_count > 1000 ? 1 : 0) +
-                      (r.vamp_ratio > 0.015 ? 1 : 0) ===
-                      1
-                )
-                .length.toString()}
-              highlight={
-                rows.filter(
-                  (r) =>
-                    rated(r) &&
-                    (r.vamp_count > 1000 ? 1 : 0) +
-                      (r.vamp_ratio > 0.015 ? 1 : 0) ===
-                      1
-                ).length > 0
-              }
-            />
-            <StatCard
-              label="Breach 2/2"
-              value={rows
-                .filter(
-                  (r) => rated(r) && r.vamp_count > 1000 && r.vamp_ratio > 0.015
-                )
-                .length.toString()}
-              highlight={rows.some(
-                (r) => rated(r) && r.vamp_count > 1000 && r.vamp_ratio > 0.015
-              )}
-            />
-            <StatCard
-              label="Portfolio VAMP"
-              value={pctFmt.format(
-                rows.reduce((s, r) => s + r.visa_sales_count, 0) > 0
-                  ? rows.reduce((s, r) => s + r.vamp_count, 0) /
-                      rows.reduce((s, r) => s + r.visa_sales_count, 0)
-                  : 0
-              )}
-              highlight={
-                rows.reduce((s, r) => s + r.visa_sales_count, 0) > 0 &&
-                rows.reduce((s, r) => s + r.vamp_count, 0) /
-                  rows.reduce((s, r) => s + r.visa_sales_count, 0) >
-                  0.015
-              }
-            />
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+            <StatCard label="Descriptors" value={rows.length.toString()} />
+            <StatCard label="In Breach" value={breachCount.toString()} highlight={breachCount > 0} />
+            <StatCard label="Warnings" value={warningCount.toString()} warn={warningCount > 0} />
+            <StatCard label="Total EFWs + Disputes" value={(totalEfw + totalDisp).toLocaleString()} />
           </div>
         )}
 
-        {/* Search bar */}
+        {/* Search */}
         <div className="relative mb-4">
           <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
             <SearchIcon />
           </div>
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setVisibleCount(PAGE_SIZE);
-            }}
-            placeholder="Search by descriptor, account, status, ratio…"
+          <input type="text" value={search}
+            onChange={(e) => { setSearch(e.target.value); setExpanded(false); }}
+            placeholder="Search descriptor, product, status…"
             className="w-full h-10 pl-9 pr-4 text-sm rounded-lg border border-gray-alpha-400 bg-background-100 text-gray-1000 placeholder:text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-1000/20 transition-shadow"
           />
           {search && (
-            <button
-              onClick={() => setSearch("")}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-900 hover:text-gray-1000"
-            >
-              ✕
-            </button>
+            <button onClick={() => setSearch("")}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-900 hover:text-gray-1000">✕</button>
           )}
         </div>
 
-        {/* Result count when searching */}
         {search && (
           <p className="text-xs text-gray-900 mb-3">
-            {filtered.length === 0
-              ? "No results"
-              : `${filtered.length} result${filtered.length !== 1 ? "s" : ""} for "${search}"`}
+            {filtered.length === 0 ? "No results" : `${filtered.length} result${filtered.length !== 1 ? "s" : ""} for "${search}"`}
           </p>
         )}
 
-        {/* Table */}
         {loading ? (
-          <div className="flex items-center justify-center h-48 text-gray-900 text-sm">
-            Loading data…
-          </div>
+          <div className="flex items-center justify-center h-48 text-gray-900 text-sm">Loading…</div>
         ) : error ? (
-          <div className="flex items-center justify-center h-48 text-red-500 text-sm">
-            {error}
-          </div>
+          <div className="flex items-center justify-center h-48 text-red-500 text-sm">{error}</div>
         ) : (
           <div className="relative">
             <Table>
               <Table.Colgroup>
+                <Table.Col className="w-[24%]" />
+                <Table.Col className="w-[9%]" />
+                <Table.Col className="w-[8%]" />
+                <Table.Col className="w-[8%]" />
+                <Table.Col className="w-[9%]" />
                 <Table.Col className="w-[14%]" />
-                <Table.Col className="w-[30%]" />
-                <Table.Col className="w-[12%]" />
                 <Table.Col className="w-[14%]" />
                 <Table.Col className="w-[14%]" />
-                <Table.Col className="w-[16%]" />
               </Table.Colgroup>
-
               <Table.Header>
                 <Table.Row>
-                  <Table.Head>Account</Table.Head>
-                  <Table.Head>Statement Descriptor</Table.Head>
+                  <Table.Head>Descriptor</Table.Head>
+                  <Table.Head>Product</Table.Head>
+                  <Table.Head>EFWs</Table.Head>
+                  <Table.Head>Disputes</Table.Head>
                   <Table.Head>VAMP Count</Table.Head>
                   <Table.Head>VAMP Ratio</Table.Head>
-                  <Table.Head>Sales</Table.Head>
+                  <Table.Head>Visa Sales</Table.Head>
                   <Table.Head>Status</Table.Head>
                 </Table.Row>
               </Table.Header>
-
               <Table.Body interactive striped>
-                {visible.map((row, i) => (
-                  <Table.Row key={`${row.statement_descriptor}-${i}`}>
-                    <Table.Cell>
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-background-200 border border-gray-alpha-400 text-gray-1000">
-                        {row.account_name}
-                      </span>
-                    </Table.Cell>
-                    <Table.Cell>
-                      <span className="font-mono text-xs">
-                        {row.statement_descriptor}
-                      </span>
-                    </Table.Cell>
-                    <Table.Cell className={`tabular-nums font-medium ${rated(row) && row.vamp_count > 1000 ? "text-red-500 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
-                      {row.vamp_count.toLocaleString()}
-                    </Table.Cell>
-                    <Table.Cell>
-                      <VampRatioDot ratio={row.vamp_ratio} noSales={!rated(row)} />
-                    </Table.Cell>
-                    <Table.Cell className="tabular-nums">
-                      {row.sales_count.toLocaleString()}
-                    </Table.Cell>
-                    <Table.Cell className="text-right">
-                      <StatusBadge vampCount={row.vamp_count} vampRatio={row.vamp_ratio} noSales={!rated(row)} />
-                    </Table.Cell>
-                  </Table.Row>
-                ))}
+                {visible.map((row, i) => {
+                  const level = statusLevel(row);
+                  const countColor =
+                    level === "breach" ? "text-red-600 dark:text-red-400" :
+                    level === "warning" ? "text-amber-600 dark:text-amber-400" :
+                    "text-emerald-600 dark:text-emerald-400";
+                  return (
+                    <Table.Row key={`${row.account_id}-${row.statement_descriptor}-${i}`}>
+                      <Table.Cell>
+                        <span className="font-mono text-xs">{row.statement_descriptor}</span>
+                      </Table.Cell>
+                      <Table.Cell>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-background-200 border border-gray-alpha-400 text-gray-1000">
+                          {row.product_name}
+                        </span>
+                      </Table.Cell>
+                      <Table.Cell className="tabular-nums">{row.efw_count.toLocaleString()}</Table.Cell>
+                      <Table.Cell className="tabular-nums">{row.disputes_count.toLocaleString()}</Table.Cell>
+                      <Table.Cell className={`tabular-nums font-medium ${countColor}`}>
+                        {row.vamp_count.toLocaleString()}
+                      </Table.Cell>
+                      <Table.Cell><VampRatioCell row={row} /></Table.Cell>
+                      <Table.Cell className="tabular-nums text-gray-900">
+                        {row.visa_sales.toLocaleString()}
+                        {row.sales_capped && <span className="text-amber-500 ml-1" title="Sales count capped at 20 000">+</span>}
+                      </Table.Cell>
+                      <Table.Cell><StatusBadge row={row} /></Table.Cell>
+                    </Table.Row>
+                  );
+                })}
               </Table.Body>
-
               {!search && (
                 <Table.Footer>
                   <Table.Row>
-                    <Table.Cell
-                      className="text-gray-1000 font-medium"
-                      colSpan={2}
-                    >
+                    <Table.Cell className="text-gray-1000 font-medium" colSpan={2}>
                       Totals ({rows.length} descriptors)
                     </Table.Cell>
-                    <Table.Cell className="text-gray-1000 font-medium tabular-nums">
-                      {rows.reduce((s, r) => s + r.vamp_count, 0).toLocaleString()}
+                    <Table.Cell className="tabular-nums font-medium text-gray-1000">
+                      {totalEfw.toLocaleString()}
                     </Table.Cell>
-                    <Table.Cell />
-                    <Table.Cell className="text-gray-1000 font-medium tabular-nums">
-                      {rows.reduce((s, r) => s + r.sales_count, 0).toLocaleString()}
+                    <Table.Cell className="tabular-nums font-medium text-gray-1000">
+                      {totalDisp.toLocaleString()}
                     </Table.Cell>
-                    <Table.Cell />
+                    <Table.Cell className="tabular-nums font-medium text-gray-1000">
+                      {(totalEfw + totalDisp).toLocaleString()}
+                    </Table.Cell>
+                    <Table.Cell colSpan={3} />
                   </Table.Row>
                 </Table.Footer>
               )}
             </Table>
 
-            {/* Infinite scroll sentinel */}
-            {visibleCount < filtered.length && (
-              <div
-                ref={sentinelRef}
-                className="flex items-center justify-center gap-2 py-6 text-sm text-gray-900"
-              >
-                <span className="inline-flex w-4 h-4 rounded-full border-2 border-gray-alpha-400 border-t-gray-1000 animate-spin" />
-                Loading more&hellip; ({visible.length.toLocaleString()} of{" "}
-                {filtered.length.toLocaleString()})
-              </div>
+            {filtered.length > PAGE_SIZE && (
+              <>
+                {!expanded && (
+                  <div className="pointer-events-none absolute bottom-12 left-0 h-20 w-full rounded-b-lg bg-gradient-to-t from-[var(--ds-background-200)] to-transparent" />
+                )}
+                <div className="h-4" />
+                <ShowMore expanded={expanded} onClick={setExpanded} className="mx-auto" />
+              </>
             )}
           </div>
         )}
@@ -548,31 +328,19 @@ export default function Dashboard() {
   );
 }
 
-function StatCard({
-  label,
-  value,
-  highlight,
-}: {
-  label: string;
-  value: string;
-  highlight?: boolean;
+function StatCard({ label, value, highlight, warn }: {
+  label: string; value: string; highlight?: boolean; warn?: boolean;
 }) {
+  const border = highlight ? "border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-900/10"
+    : warn ? "border-amber-200 bg-amber-50 dark:border-amber-900/40 dark:bg-amber-900/10"
+    : "border-gray-alpha-400 bg-background-100";
+  const text = highlight ? "text-red-600 dark:text-red-400"
+    : warn ? "text-amber-600 dark:text-amber-400"
+    : "text-gray-1000";
   return (
-    <div
-      className={`rounded-lg border p-4 ${
-        highlight
-          ? "border-red-200 bg-red-50 dark:border-red-900/40 dark:bg-red-900/10"
-          : "border-gray-alpha-400 bg-background-100"
-      }`}
-    >
+    <div className={`rounded-lg border p-4 ${border}`}>
       <p className="text-xs text-gray-900 mb-1">{label}</p>
-      <p
-        className={`text-xl font-bold tabular-nums ${
-          highlight ? "text-red-600 dark:text-red-400" : "text-gray-1000"
-        }`}
-      >
-        {value}
-      </p>
+      <p className={`text-xl font-bold tabular-nums ${text}`}>{value}</p>
     </div>
   );
 }
