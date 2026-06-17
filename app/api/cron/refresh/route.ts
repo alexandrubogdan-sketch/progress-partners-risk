@@ -30,10 +30,40 @@ async function loadState(): Promise<StateMap> {
   }
 }
 
+/** Returns true if another cron run started less than BUDGET_MS ms ago. */
+async function isLocked(): Promise<boolean> {
+  try {
+    const snapshotUrl = process.env.BLOB_SNAPSHOT_URL;
+    if (!snapshotUrl) return false;
+    const lockUrl = snapshotUrl.replace(/\/latest\.json$/, "/lock.json");
+    const res = await fetch(lockUrl, { cache: "no-store" });
+    if (!res.ok) return false;
+    const { ts } = (await res.json()) as { ts: number };
+    return Date.now() - ts < BUDGET_MS;
+  } catch {
+    return false;
+  }
+}
+
+async function writeLock(): Promise<void> {
+  await put("vamp/lock.json", JSON.stringify({ ts: Date.now() }), {
+    access: "public",
+    addRandomSuffix: false,
+    allowOverwrite: true,
+  });
+}
+
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // Prevent concurrent cron runs from racing on the same state.
+  if (await isLocked()) {
+    return NextResponse.json({ ok: false, skipped: "concurrent run in progress — try again shortly" });
+  }
+  await writeLock();
+
   try {
     const accounts = parseAccounts();
     const prevState = await loadState();
@@ -41,7 +71,6 @@ export async function GET(req: NextRequest) {
     const { state, snapshot, refreshed, remaining } =
       await buildSnapshotIncremental(accounts, prevState, deadline, 10);
 
-    // Write state first (incremental resume data), then snapshot (display data)
     await Promise.all([
       put("vamp/state.json", JSON.stringify(state), {
         access: "public",
