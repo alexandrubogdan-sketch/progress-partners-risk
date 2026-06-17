@@ -35,6 +35,7 @@ export async function GET(req: NextRequest) {
     await put("vamp/latest.json", JSON.stringify(snapshot), {
       access: "public",
       addRandomSuffix: false,
+      allowOverwrite: true,
     });
 
     return NextResponse.json({
