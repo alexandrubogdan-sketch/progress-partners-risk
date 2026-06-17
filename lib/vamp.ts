@@ -11,7 +11,7 @@ export type VampRow = {
   account_name: string;
   statement_descriptor: string;
   report_month: string; // YYYY-MM-01
-  as_of: string; // ISO date of the data window end
+  as_of: string; // ISO date of the data window en
   product_name: string; // kept for UI compat = account_name
   sales_count: number; // all card brands, succeeded
   sales_volume: number;
@@ -281,7 +281,7 @@ export async function fetchAccountVamp(
       ok: false,
       error: err instanceof Error ? err.message : String(err),
       rows: [],
-      charge_windows: prevWindows,
+      charge_windows: done,
     };
   }
 }
