@@ -447,5 +447,22 @@ export function parseAccounts(): { name: string; key: string }[] {
   if (out.length === 0) {
     throw new Error("STRIPE_ACCOUNTS parsed but contained no rk_/sk_ keys");
   }
+  // Apply per-account key overrides (STRIPE_ACCOUNT_OVERRIDES env var).
+  // Format: {"Account Name":"rk_live_...", ...}
+  // Useful for rotating a single key without re-entering the full STRIPE_ACCOUNTS.
+  const overridesRaw = process.env.STRIPE_ACCOUNT_OVERRIDES;
+  if (overridesRaw) {
+    try {
+      const overrides = JSON.parse(overridesRaw) as Record<string, string>;
+      for (const entry of out) {
+        if (overrides[entry.name]) {
+          entry.key = overrides[entry.name].trim();
+        }
+      }
+    } catch {
+      // malformed STRIPE_ACCOUNT_OVERRIDES: ignore, use base keys
+    }
+  }
+
   return out;
 }
