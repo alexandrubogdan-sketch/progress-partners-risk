@@ -10,7 +10,8 @@ export async function GET() {
     return NextResponse.json({ error: "BLOB_SNAPSHOT_URL not set" }, { status: 500 });
   }
   try {
-    const res = await fetch(snapshotUrl, { next: { revalidate: 3600 } });
+    // Always fetch the latest blob — cron refreshes it every few minutes.
+    const res = await fetch(snapshotUrl, { cache: "no-store" });
     if (!res.ok) {
       return NextResponse.json(
         { error: `Snapshot fetch failed: ${res.status}` },
@@ -20,7 +21,8 @@ export async function GET() {
     const data = await res.json();
     return NextResponse.json(data, {
       headers: {
-        "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400",
+        // Allow edge CDN to serve fresh for 30s, then revalidate.
+        "Cache-Control": "public, s-maxage=30, stale-while-revalidate=60",
       },
     });
   } catch (err) {
