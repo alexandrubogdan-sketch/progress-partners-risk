@@ -4,12 +4,12 @@ import { buildSnapshotIncremental, parseAccounts } from "@/lib/vamp";
 import type { Snapshot, StateMap } from "@/lib/vamp";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 800; // seconds (Pro plan)
+export const maxDuration = 300; // seconds (Hobby plan max)
 
 const SNAPSHOT_PATH = "vamp/latest.json";
 const STATE_PATH = "vamp/state-v2.json";
 const STALE_MS = 30 * 60 * 1000;
-const BUDGET_MS = 660_000; // stop new work after 11 min (800s hard kill)
+const BUDGET_MS = 260_000; // stop new work after ~4.3 min (300s hard kill)
 
 async function readBlobJson<T>(path: string): Promise<T | null> {
   try {
