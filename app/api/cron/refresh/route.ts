@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { put } from "@vercel/blob";
-import { buildSnapshotIncremental, parseAccounts } from "@/lib/vamp";
+import { buildSnapshotIncremental, parseAccounts, StateMap } from "@/lib/vamp";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -17,26 +17,43 @@ function isAuthorized(req: NextRequest): boolean {
   return false;
 }
 
+async function loadState(): Promise<StateMap> {
+  try {
+    const snapshotUrl = process.env.BLOB_SNAPSHOT_URL;
+    if (!snapshotUrl) return {};
+    const stateUrl = snapshotUrl.replace(/\/latest\.json$/, "/state.json");
+    const res = await fetch(stateUrl, { cache: "no-store" });
+    if (!res.ok) return {};
+    return (await res.json()) as StateMap;
+  } catch {
+    return {};
+  }
+}
+
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {
     const accounts = parseAccounts();
+    const prevState = await loadState();
     const deadline = Date.now() + BUDGET_MS;
-    const { snapshot, refreshed, remaining } = await buildSnapshotIncremental(
-      accounts,
-      {},
-      deadline,
-      10
-    );
+    const { state, snapshot, refreshed, remaining } =
+      await buildSnapshotIncremental(accounts, prevState, deadline, 10);
 
-    // Single put() per cron run — 1 Advanced Operation regardless of account count
-    await put("vamp/latest.json", JSON.stringify(snapshot), {
-      access: "public",
-      addRandomSuffix: false,
-      allowOverwrite: true,
-    });
+    // Write state first (incremental resume data), then snapshot (display data)
+    await Promise.all([
+      put("vamp/state.json", JSON.stringify(state), {
+        access: "public",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+      }),
+      put("vamp/latest.json", JSON.stringify(snapshot), {
+        access: "public",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+      }),
+    ]);
 
     return NextResponse.json({
       ok: true,
