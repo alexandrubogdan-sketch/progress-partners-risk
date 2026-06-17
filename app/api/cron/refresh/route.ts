@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { put } from "@vercel/blob";
 import { buildSnapshotIncremental, parseAccounts } from "@/lib/vamp";
 
 export const dynamic = "force-dynamic";
@@ -8,8 +9,8 @@ const BUDGET_MS = 260_000;
 
 function isAuthorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
-  if (!secret) return true; // No secret configured — allow all
-  if (req.headers.get("x-vercel-cron")) return true; // Vercel Cron system header
+  if (!secret) return true;
+  if (req.headers.get("x-vercel-cron")) return true;
   const auth = req.headers.get("authorization");
   if (auth === `Bearer ${secret}`) return true;
   if (req.nextUrl.searchParams.get("secret") === secret) return true;
@@ -20,7 +21,6 @@ export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-
   try {
     const accounts = parseAccounts();
     const deadline = Date.now() + BUDGET_MS;
@@ -30,6 +30,12 @@ export async function GET(req: NextRequest) {
       deadline,
       10
     );
+
+    // Single put() per cron run — 1 Advanced Operation regardless of account count
+    await put("vamp/latest.json", JSON.stringify(snapshot), {
+      access: "public",
+      addRandomSuffix: false,
+    });
 
     return NextResponse.json({
       ok: true,
