@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 
 // Vercel Pro: allow up to 5 min for background revalidation
 export const maxDuration = 300;
-// ISR: cache 1 hour, revalidate in background
-export const revalidate = 3600;
+
+export const dynamic = "force-dynamic";
 
 // ---------------------------------------------------------------------------
 // Types
