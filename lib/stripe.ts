@@ -87,18 +87,22 @@ export async function listAll<T extends { id: string }>(
 }
 
 /** Stream pages through a handler instead of accumulating (memory-safe for
- *  very large charge lists). */
+ *  very large charge lists). Returns { ok: true } when done, or
+ *  { ok: false, cursor } with the last-seen charge ID so the caller can
+ *  resume from that position on the next invocation. */
 export async function forEachPage<T extends { id: string }>(
   key: string,
   path: string,
   params: Record<string, string | number | string[]>,
   onPage: (items: T[]) => void,
   maxPages = 1000,
-  deadline?: number
-): Promise<boolean> {
-  let startingAfter: string | undefined;
+  deadline?: number,
+  resumeAfter?: string // cursor to resume mid-window
+): Promise<{ ok: boolean; cursor: string | null }> {
+  let startingAfter: string | undefined = resumeAfter;
+  let lastId: string | null = resumeAfter ?? null;
   for (let page = 0; page < maxPages; page++) {
-    if (deadline && Date.now() > deadline) return false; // out of time
+    if (deadline && Date.now() > deadline) return { ok: false, cursor: lastId }; // out of time
     const p: Record<string, string | number | string[]> = {
       ...params,
       limit: 100,
@@ -106,8 +110,9 @@ export async function forEachPage<T extends { id: string }>(
     if (startingAfter) p.starting_after = startingAfter;
     const res = await stripeGet<T>(key, path, p);
     onPage(res.data);
+    if (res.data.length > 0) lastId = res.data[res.data.length - 1].id;
     if (!res.has_more || res.data.length === 0) break;
     startingAfter = res.data[res.data.length - 1].id;
   }
-  return true;
+  return { ok: true, cursor: null };
 }
