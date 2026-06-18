@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { listAll, StripeCharge, StripeDispute, StripeEFW } from "@/lib/stripe";
 import { parseAccounts } from "@/lib/vamp";
 
-// Temporary export endpoint — streams charges, disputes and EFWs as CSV
-// Usage: GET /api/export?account=Info-Checker&type=charges|disputes|efws
+// Temporary export endpoint for Solidgate data request.
 // Remove this file after the export is complete.
 
 export const maxDuration = 300;
@@ -18,11 +17,10 @@ function toCSV(rows: Record<string, string | number | boolean | null>[]): string
       ? `"${s.replace(/"/g, '""')}"`
       : s;
   };
-  const lines = [
+  return [
     headers.join(","),
     ...rows.map((r) => headers.map((h) => escape(r[h])).join(",")),
-  ];
-  return lines.join("\n");
+  ].join("\n");
 }
 
 function ts(unix: number) {
@@ -33,6 +31,8 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const accountName = searchParams.get("account") ?? "Info-Checker";
   const type = searchParams.get("type") ?? "charges";
+  // For charges: how many pages max (100 per page). Default 100 = 10k rows.
+  const maxPages = Math.min(parseInt(searchParams.get("pages") ?? "100"), 300);
 
   const accounts = parseAccounts();
   const account = accounts.find(
@@ -47,15 +47,13 @@ export async function GET(req: NextRequest) {
   let filename = "";
 
   if (type === "charges") {
-    // June 2026 charges
     const june1 = Math.floor(new Date("2026-06-01T00:00:00Z").getTime() / 1000);
     const charges = await listAll<StripeCharge & {
       billing_details?: { email?: string };
       receipt_email?: string;
       outcome?: { risk_level?: string };
       refunded?: boolean;
-      calculated_statement_descriptor?: string;
-    }>(key, "/charges", { "created[gte]": june1 }, 5000);
+    }>(key, "/charges", { "created[gte]": june1 }, maxPages);
 
     const rows = charges.map((c) => ({
       id: c.id,
@@ -70,7 +68,7 @@ export async function GET(req: NextRequest) {
       refunded: c.refunded ? "yes" : "no",
     }));
     csv = toCSV(rows);
-    filename = `${accountName}_Charges_June2026.csv`;
+    filename = `${accountName}_Charges_June2026_p${maxPages}.csv`;
 
   } else if (type === "disputes") {
     const disputes = await listAll<StripeDispute & {
