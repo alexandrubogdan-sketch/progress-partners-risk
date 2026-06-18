@@ -109,6 +109,8 @@ export async function fetchAccountVamp(
   prevWindows: Record<string, Record<string, DescAgg>> = {},
   deadline: number = Date.now() + 600_000
 ): Promise<AccountResult> {
+  // Hoist done before try so catch block can reference it
+  let done: Record<string, Record<string, DescAgg>> = { ...prevWindows };
   try {
     const created = { "created[gte]": fromUnix, "created[lte]": toUnix };
 
@@ -119,7 +121,7 @@ export async function fetchAccountVamp(
     for (let t = fromUnix; t <= toUnix; t += WINDOW) {
       windows.push([t, Math.min(t + WINDOW - 1, toUnix)]);
     }
-    const done: Record<string, Record<string, DescAgg>> = { ...prevWindows };
+    // done is initialized above; add completed windows here
     const pending = windows.filter(
       ([wf, wt]) => !(String(wf) in done) || wt >= toUnix // open window: redo
     );
