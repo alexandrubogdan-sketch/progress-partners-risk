@@ -11,7 +11,7 @@ export type VampRow = {
   account_name: string;
   statement_descriptor: string;
   report_month: string; // YYYY-MM-01
-  as_of: string; // ISO date of the data window en
+  as_of: string; // ISO date of the data window end
   product_name: string; // kept for UI compat = account_name
   sales_count: number; // all card brands, succeeded
   sales_volume: number;
@@ -109,7 +109,7 @@ export async function fetchAccountVamp(
   prevWindows: Record<string, Record<string, DescAgg>> = {},
   deadline: number = Date.now() + 600_000
 ): Promise<AccountResult> {
-  // Hoist done before try so catch block can reference it
+  // Hoist done before try so the catch block can reference it
   let done: Record<string, Record<string, DescAgg>> = { ...prevWindows };
   try {
     const created = { "created[gte]": fromUnix, "created[lte]": toUnix };
@@ -123,10 +123,13 @@ export async function fetchAccountVamp(
     }
     // done is initialized above; add completed windows here
     const pending = windows.filter(
-      ([wf, wt]) => !(String(wf) in done) || wt >= toUnix // open window: redo
+      ([wf, wt]) =>
+        !(String(wf) in done) || // not yet fetched
+        wt >= toUnix || // open window: always redo
+        "__cursor__" in (done[String(wf)] ?? {}) // partial: resume from cursor
     );
 
-    const WINDOW_CONCURRENCY = 3; // gentle: some accounts have low rate limits
+    const WINDOW_CONCURRENCY = 1; // one window at a time avoids rate-limit contention
     let wi = 0;
     let incomplete = false;
     const windowWorker = async () => {
@@ -136,8 +139,22 @@ export async function fetchAccountVamp(
           return;
         }
         const [wFrom, wTo] = pending[wi++];
-        const agg: Record<string, DescAgg> = {};
-        const finished = await forEachPage<StripeCharge>(
+        // Resume from cursor if we have a partial window from a prior run
+        const partialEntry = done[String(wFrom)];
+        const resumeCursor: string | undefined =
+          partialEntry && "__cursor__" in partialEntry
+            ? (partialEntry.__cursor__ as unknown as string)
+            : undefined;
+        // Start with any already-aggregated data for this window
+        const agg: Record<string, DescAgg> =
+          partialEntry && !("__cursor__" in partialEntry)
+            ? { ...partialEntry }
+            : partialEntry && "__cursor__" in partialEntry
+            ? Object.fromEntries(
+                Object.entries(partialEntry).filter(([k]) => k !== "__cursor__")
+              ) as Record<string, DescAgg>
+            : {};
+        const result = await forEachPage<StripeCharge>(
           key,
           "/charges",
           { "created[gte]": wFrom, "created[lte]": wTo },
@@ -152,10 +169,18 @@ export async function fetchAccountVamp(
             }
           },
           1000,
-          deadline - 15_000
+          deadline - 15_000,
+          resumeCursor
         );
-        if (!finished) {
-          incomplete = true; // window partially fetched: discard, retry next run
+        if (!result.ok) {
+          // Save partial progress with cursor so next run can resume
+          if (result.cursor) {
+            done[String(wFrom)] = {
+              ...agg,
+              __cursor__: result.cursor as unknown as DescAgg,
+            };
+          }
+          incomplete = true;
           return;
         }
         done[String(wFrom)] = agg;
