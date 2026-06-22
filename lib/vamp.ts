@@ -25,6 +25,7 @@ export type VampRow = {
   vamp_volume: number;
   status: string;
   refreshed_at: string;
+  source?: "stripe" | "solidgate";
 };
 
 export type DescAgg = { s: number; v: number; vs: number }; // sales, volume(cents), visa sales
@@ -299,6 +300,7 @@ export async function fetchAccountVamp(
           ? "warning"
           : "ok",
         refreshed_at: refreshedAt,
+        source: "stripe",
       });
     }
     return { account: accountName, ok: true, rows, charge_windows: done };
