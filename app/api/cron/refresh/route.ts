@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { put } from "@vercel/blob";
-import { buildSnapshotIncremental, parseAccounts, StateMap } from "@/lib/vamp";
+import { buildSnapshotIncremental, parseAccounts, type Snapshot, type StateMap, type VampRow } from "@/lib/vamp";
+import { buildSolidgateSnapshotIncremental, parseSolidgateChannels } from "@/lib/solidgate-snapshot";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -17,12 +18,12 @@ function isAuthorized(req: NextRequest): boolean {
   return false;
 }
 
-async function loadState(): Promise<StateMap> {
+async function loadStateFor(blobKey: string): Promise<StateMap> {
   try {
     const snapshotUrl = process.env.BLOB_SNAPSHOT_URL;
     if (!snapshotUrl) return {};
-    const stateUrl = snapshotUrl.replace(/\/latest\.json$/, "/state.json");
-    const res = await fetch(stateUrl, { cache: "no-store" });
+    const url = snapshotUrl.replace(/\/latest\.json$/, `/${blobKey}.json`);
+    const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) return {};
     return (await res.json()) as StateMap;
   } catch {
@@ -30,7 +31,6 @@ async function loadState(): Promise<StateMap> {
   }
 }
 
-/** Returns true if another cron run started less than BUDGET_MS ms ago. */
 async function isLocked(): Promise<boolean> {
   try {
     const snapshotUrl = process.env.BLOB_SNAPSHOT_URL;
@@ -53,50 +53,108 @@ async function writeLock(): Promise<void> {
   });
 }
 
+/** Merge two source snapshots into one combined snapshot for the UI. */
+function mergeSnapshots(stripe: Snapshot | null, solidgate: Snapshot | null): Snapshot {
+  const rows: VampRow[] = [
+    ...(stripe?.rows ?? []),
+    ...(solidgate?.rows ?? []),
+  ];
+  rows.sort((a, b) => b.vamp_count - a.vamp_count || b.vamp_ratio - a.vamp_ratio);
+  rows.forEach((r, idx) => (r.id = idx + 1));
+  const generated_at = new Date().toISOString();
+  const reportMonth = stripe?.report_month ?? solidgate?.report_month ?? generated_at.slice(0, 10);
+  return {
+    generated_at,
+    report_month: reportMonth,
+    window: stripe?.window ?? solidgate?.window ?? { from: generated_at, to: generated_at },
+    accounts_total: (stripe?.accounts_total ?? 0) + (solidgate?.accounts_total ?? 0),
+    accounts_ok: (stripe?.accounts_ok ?? 0) + (solidgate?.accounts_ok ?? 0),
+    errors: [...(stripe?.errors ?? []), ...(solidgate?.errors ?? [])],
+    rows,
+  };
+}
+
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Prevent concurrent cron runs from racing on the same state.
   if (await isLocked()) {
     return NextResponse.json({ ok: false, skipped: "concurrent run in progress — try again shortly" });
   }
   await writeLock();
 
   try {
-    const accounts = parseAccounts();
-    const prevState = await loadState();
     const deadline = Date.now() + BUDGET_MS;
-    const { state, snapshot, refreshed, remaining } =
-      await buildSnapshotIncremental(accounts, prevState, deadline, 10);
+
+    // ── Stripe pipeline ──
+    let stripeSnap: Snapshot | null = null;
+    let stripeState: StateMap = {};
+    let stripeRefreshed = 0;
+    let stripeRemaining = 0;
+    try {
+      const stripeAccounts = parseAccounts();
+      const prev = await loadStateFor("state");
+      // Split the budget in two so neither side starves the other.
+      const stripeDeadline = Math.min(deadline, Date.now() + BUDGET_MS / 2);
+      const res = await buildSnapshotIncremental(stripeAccounts, prev, stripeDeadline, 10);
+      stripeSnap = res.snapshot;
+      stripeState = res.state;
+      stripeRefreshed = res.refreshed;
+      stripeRemaining = res.remaining;
+    } catch (e) {
+      // STRIPE_ACCOUNTS missing or parse error: keep going with just Solidgate.
+      console.warn("Stripe pipeline skipped:", e instanceof Error ? e.message : e);
+    }
+
+    // ── Solidgate pipeline ──
+    let solidSnap: Snapshot | null = null;
+    let solidState: StateMap = {};
+    let solidRefreshed = 0;
+    let solidRemaining = 0;
+    try {
+      const channels = parseSolidgateChannels();
+      if (channels.length > 0) {
+        const prev = await loadStateFor("state-solidgate");
+        const res = await buildSolidgateSnapshotIncremental(channels, prev, deadline, 4);
+        solidSnap = res.snapshot;
+        solidState = res.state;
+        solidRefreshed = res.refreshed;
+        solidRemaining = res.remaining;
+      }
+    } catch (e) {
+      console.warn("Solidgate pipeline failed:", e instanceof Error ? e.message : e);
+    }
+
+    const combined = mergeSnapshots(stripeSnap, solidSnap);
 
     await Promise.all([
-      put("vamp/state.json", JSON.stringify(state), {
-        access: "public",
-        addRandomSuffix: false,
-        allowOverwrite: true,
+      put("vamp/state.json", JSON.stringify(stripeState), {
+        access: "public", addRandomSuffix: false, allowOverwrite: true,
       }),
-      put("vamp/latest.json", JSON.stringify(snapshot), {
-        access: "public",
-        addRandomSuffix: false,
-        allowOverwrite: true,
+      put("vamp/state-solidgate.json", JSON.stringify(solidState), {
+        access: "public", addRandomSuffix: false, allowOverwrite: true,
+      }),
+      put("vamp/latest.json", JSON.stringify(combined), {
+        access: "public", addRandomSuffix: false, allowOverwrite: true,
       }),
     ]);
 
     return NextResponse.json({
       ok: true,
-      report_month: snapshot.report_month,
-      rows: snapshot.rows.length,
-      accounts_ok: snapshot.accounts_ok,
-      accounts_total: snapshot.accounts_total,
-      refreshed_this_run: refreshed,
-      remaining,
+      report_month: combined.report_month,
+      rows: combined.rows.length,
+      stripe: stripeSnap
+        ? { accounts_ok: stripeSnap.accounts_ok, accounts_total: stripeSnap.accounts_total, refreshed: stripeRefreshed, remaining: stripeRemaining }
+        : { skipped: "STRIPE_ACCOUNTS not set or parse error" },
+      solidgate: solidSnap
+        ? { channels_ok: solidSnap.accounts_ok, channels_total: solidSnap.accounts_total, refreshed: solidRefreshed, remaining: solidRemaining }
+        : { skipped: "SOLIDGATE_ACCOUNTS not set" },
+      errors: combined.errors,
       note:
-        remaining > 0
-          ? "Run again to refresh the remaining accounts."
+        stripeRemaining + solidRemaining > 0
+          ? "Run again to refresh the remaining accounts/channels."
           : "All accounts refreshed.",
-      errors: snapshot.errors,
     });
   } catch (err) {
     return NextResponse.json(
