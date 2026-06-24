@@ -130,7 +130,7 @@ export async function fetchAccountVamp(
         "__cursor__" in (done[String(wf)] ?? {}) // partial: resume from cursor
     );
 
-    const WINDOW_CONCURRENCY = 1; // one window at a time avoids rate-limit contention
+    const WINDOW_CONCURRENCY = 4; // one window at a time avoids rate-limit contention
     let wi = 0;
     let incomplete = false;
     const windowWorker = async () => {
