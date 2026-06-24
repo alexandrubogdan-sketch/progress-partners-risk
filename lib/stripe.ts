@@ -13,6 +13,9 @@ export type StripeCharge = {
   status: string; // succeeded | pending | failed
   calculated_statement_descriptor: string | null;
   statement_descriptor: string | null;
+  refunded?: boolean;
+  amount_refunded?: number;
+  captured?: boolean;
   payment_method_details?: {
     card?: { brand?: string | null } | null;
     card_present?: { brand?: string | null } | null;
