@@ -54,7 +54,6 @@ const emptyBucket = (): Bucket => ({
 
 const SETTLED_STATUSES = new Set([
   "settle_ok",
-  "approved",     // sometimes pre-settlement
 ]);
 
 function isVisaScheme(o: SolidgateOrder): boolean {
