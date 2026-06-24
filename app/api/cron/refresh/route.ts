@@ -79,7 +79,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (await isLocked()) {
+  const forceUnlock = req.nextUrl.searchParams.get("force") === "1";
+  if (!forceUnlock && await isLocked()) {
     return NextResponse.json({ ok: false, skipped: "concurrent run in progress — try again shortly" });
   }
   await writeLock();
