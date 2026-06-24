@@ -162,6 +162,7 @@ export async function fetchAccountVamp(
           (items) => {
             for (const c of items) {
               if (c.status !== "succeeded") continue;
+              if (c.refunded === true) continue;
               const d = descriptorOf(c, accountName);
               const a = (agg[d] ??= { s: 0, v: 0, vs: 0 });
               a.s += 1;
@@ -318,7 +319,10 @@ export async function fetchAccountVamp(
 export type AccountState = AccountResult & { refreshed_at: string };
 export type StateMap = Record<string, AccountState>;
 
-const REFRESH_IF_OLDER_MS = 6 * 60 * 60 * 1000; // don't redo accounts done <6h ago (cron is daily)
+const REFRESH_IF_OLDER_MS = 6 * 60 * 60 * 1000;
+
+// Bump to invalidate cached per-window aggregates after a filter-logic change.
+const STATE_VERSION = "v2-sales-non-refunded"; // don't redo accounts done <6h ago (cron is daily)
 
 /**
  * Incremental snapshot builder. Processes accounts that are missing, errored,
@@ -343,9 +347,10 @@ export async function buildSnapshotIncremental(
   const asOf = now.toISOString();
 
   const state: StateMap = { ...prevState };
-  // Drop state from a previous month
+  // Drop state from a previous month or saved under an older filter version
   for (const [name, st] of Object.entries(state)) {
-    if (st.rows.length > 0 && st.rows[0].report_month !== reportMonth) {
+    const ver = (st as unknown as { state_version?: string }).state_version;
+    if ((st.rows.length > 0 && st.rows[0].report_month !== reportMonth) || ver !== STATE_VERSION) {
       delete state[name];
     }
   }
@@ -392,7 +397,8 @@ export async function buildSnapshotIncremental(
         refreshed_at: res.ok
           ? new Date().toISOString()
           : state[a.name]?.refreshed_at ?? new Date(0).toISOString(),
-      };
+        state_version: STATE_VERSION,
+      } as AccountState & { state_version: string };
       if (res.ok) refreshed++;
       if (onProgress) {
         try {
