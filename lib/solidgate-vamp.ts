@@ -180,7 +180,7 @@ export async function fetchSolidgateChannelVamp(
     account: channel.name,
     ok: true,
     rows: [row],
-    charge_windows: done,
+    charge_windows: {},
   };
 }
 
