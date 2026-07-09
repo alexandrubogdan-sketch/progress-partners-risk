@@ -93,73 +93,36 @@ export async function fetchSolidgateChannelVamp(
 
   const done: Record<string, Record<string, DescAgg>> = { ...prevWindows };
 
-  // --- Denominator: pull /card-orders per window, aggregate sales ---
+  // --- Denominator: pull /card-orders for the whole month, aggregate sales ---
+  // Simpler single-month fetch; matches the pattern used by /chargebacks and
+  // /fraud-alerts below. The previous per-window loop was producing sales_count=0
+  // in production despite the API returning real orders.
   const bucket = emptyBucket();
-  // Bucket is keyed by single descriptor (this channel's), but we mirror the
-  // Stripe pipeline's "windows -> descriptor -> agg" shape for resumability.
-  for (const [wf, wt] of windows) {
-    if (Date.now() > deadline - 25_000) {
-      // out of time — bank what we have, ask for another run
-      return {
-        account: channel.name,
-        ok: false,
-        error: `partial: budget exhausted with ${Object.keys(done).length}/${windows.length} windows fetched`,
-        rows: [],
-        charge_windows: done,
-      };
-    }
-    if (wf in done && !("__cursor__" in (done[wf] ?? {}))) continue; // already complete
-
-    const agg: Record<string, DescAgg> = done[wf] && !("__cursor__" in done[wf])
-      ? { ...done[wf] }
-      : {};
-    const resume =
-      done[wf] && "__cursor__" in done[wf]
-        ? ((done[wf] as unknown as Record<string, string>).__cursor__ as string)
-        : undefined;
-
-    const res = await forEachReportPage<SolidgateOrder>(
+  try {
+    const settledOrders = await listAllReport<SolidgateOrder>(
       channel.publicKey,
       channel.secretKey,
       "/api/v1/card-orders",
-      { filter: "created_at", date_from: wf, date_to: wt },
-      "orders",
-      (orders) => {
-        for (const o of orders) {
-          if (!SETTLED_STATUSES.has((o.status || "").toLowerCase())) continue;
-          if ((o.amount || 0) <= 0) continue;
-          const a = (agg[channel.descriptor] ??= { s: 0, v: 0, vs: 0 });
-          a.s += 1;
-          a.v += o.amount;
-          if (isVisaScheme(o)) a.vs += 1;
-        }
-      },
-      deadline - 15_000,
-      resume
+      { filter: "created_at", date_from: fromIso, date_to: toIso },
+      "orders"
     );
-    if (!res.ok) {
-      if (res.cursor) {
-        done[wf] = { ...agg, __cursor__: res.cursor as unknown as DescAgg };
-      }
-      return {
-        account: channel.name,
-        ok: false,
-        error: `partial: window ${wf} interrupted`,
-        rows: [],
-        charge_windows: done,
-      };
+    for (const o of settledOrders) {
+      if (!SETTLED_STATUSES.has((o.status || "").toLowerCase())) continue;
+      if ((o.amount || 0) <= 0) continue;
+      bucket.sales_count += 1;
+      bucket.sales_volume += o.amount;
+      if (isVisaScheme(o)) bucket.visa_sales_count += 1;
     }
-    done[wf] = agg;
+  } catch (e) {
+    return {
+      account: channel.name,
+      ok: false,
+      error: `denominator fetch failed: ${e instanceof Error ? e.message : String(e)}`,
+      rows: [],
+      charge_windows: {},
+    };
   }
-
-  // Roll the per-window aggregates up
-  for (const wmap of Object.values(done)) {
-    for (const a of Object.values(wmap)) {
-      bucket.sales_count += a.s;
-      bucket.sales_volume += a.v;
-      bucket.visa_sales_count += a.vs;
-    }
-  }
+  const done: Record<string, Record<string, DescAgg>> = {};
 
   // --- TC15 chargebacks ---
   const cbOrders = await listAllReport<SolidgateOrder>(
