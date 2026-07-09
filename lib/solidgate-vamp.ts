@@ -75,24 +75,6 @@ export async function fetchSolidgateChannelVamp(
   prevWindows: Record<string, Record<string, DescAgg>> = {},
   deadline: number = Date.now() + 600_000
 ): Promise<AccountResult> {
-  // Use simple 1-day windows so partial progress resumes naturally.
-  const WINDOW_HOURS = 24;
-  const fmt = (d: Date) => d.toISOString().slice(0, 19).replace("T", " ");
-  const fromDate = new Date(fromIso.replace(" ", "T") + "Z");
-  const toDate = new Date(toIso.replace(" ", "T") + "Z");
-  const windows: [string, string][] = [];
-  for (
-    let t = fromDate.getTime();
-    t < toDate.getTime();
-    t += WINDOW_HOURS * 3600_000
-  ) {
-    const wf = new Date(t);
-    const wt = new Date(Math.min(t + WINDOW_HOURS * 3600_000 - 1000, toDate.getTime()));
-    windows.push([fmt(wf), fmt(wt)]);
-  }
-
-  const done: Record<string, Record<string, DescAgg>> = { ...prevWindows };
-
   // --- Denominator: pull /card-orders for the whole month, aggregate sales ---
   // Simpler single-month fetch; matches the pattern used by /chargebacks and
   // /fraud-alerts below. The previous per-window loop was producing sales_count=0
@@ -122,7 +104,6 @@ export async function fetchSolidgateChannelVamp(
       charge_windows: {},
     };
   }
-  const done: Record<string, Record<string, DescAgg>> = {};
 
   // --- TC15 chargebacks ---
   const cbOrders = await listAllReport<SolidgateOrder>(
