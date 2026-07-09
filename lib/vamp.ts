@@ -319,7 +319,7 @@ export async function fetchAccountVamp(
 export type AccountState = AccountResult & { refreshed_at: string };
 export type StateMap = Record<string, AccountState>;
 
-const REFRESH_IF_OLDER_MS = 6 * 60 * 60 * 1000;
+const REFRESH_IF_OLDER_MS = 1 * 60 * 60 * 1000;
 
 // Bump to invalidate cached per-window aggregates after a filter-logic change.
 const STATE_VERSION = "v2-sales-non-refunded"; // don't redo accounts done <6h ago (cron is daily)
