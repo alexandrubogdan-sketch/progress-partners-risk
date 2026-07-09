@@ -6,6 +6,9 @@ import type { AccountState, Snapshot, StateMap } from "./vamp";
 
 const REFRESH_IF_OLDER_MS = 6 * 60 * 60 * 1000;
 
+// Bump to force full Solidgate re-fetch (e.g. after fixing the denominator query).
+const STATE_VERSION = "v2-single-month-fetch";
+
 export async function buildSolidgateSnapshotIncremental(
   channels: SolidgateChannel[],
   prevState: StateMap,
@@ -23,7 +26,8 @@ export async function buildSolidgateSnapshotIncremental(
 
   const state: StateMap = { ...prevState };
   for (const [name, st] of Object.entries(state)) {
-    if (st.rows.length > 0 && st.rows[0].report_month !== reportMonth) {
+    const ver = (st as unknown as { state_version?: string }).state_version;
+    if ((st.rows.length > 0 && st.rows[0].report_month !== reportMonth) || ver !== STATE_VERSION) {
       delete state[name];
     }
   }
@@ -65,7 +69,8 @@ export async function buildSolidgateSnapshotIncremental(
         refreshed_at: res.ok
           ? new Date().toISOString()
           : state[c.name]?.refreshed_at ?? new Date(0).toISOString(),
-      } as AccountState;
+        state_version: STATE_VERSION,
+      } as AccountState & { state_version: string };
       if (res.ok) refreshed++;
       if (onProgress) {
         try { await onProgress(state); } catch {}
