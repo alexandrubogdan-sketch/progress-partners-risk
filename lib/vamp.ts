@@ -162,7 +162,7 @@ export async function fetchAccountVamp(
           (items) => {
             for (const c of items) {
               if (c.status !== "succeeded") continue;
-              if (c.refunded === true) continue;
+              if (!isVisa(c)) continue;
               const d = descriptorOf(c, accountName);
               const a = (agg[d] ??= { s: 0, v: 0, vs: 0 });
               a.s += 1;
@@ -322,7 +322,7 @@ export type StateMap = Record<string, AccountState>;
 const REFRESH_IF_OLDER_MS = 1 * 60 * 60 * 1000;
 
 // Bump to invalidate cached per-window aggregates after a filter-logic change.
-const STATE_VERSION = "v2-sales-non-refunded"; // don't redo accounts done <6h ago (cron is daily)
+const STATE_VERSION = "v3-sigma-visa-only"; // don't redo accounts done <6h ago (cron is daily)
 
 /**
  * Incremental snapshot builder. Processes accounts that are missing, errored,
