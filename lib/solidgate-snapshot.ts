@@ -4,7 +4,7 @@
 import { fetchSolidgateChannelVamp, parseSolidgateChannels, type SolidgateChannel } from "./solidgate-vamp";
 import type { AccountState, Snapshot, StateMap } from "./vamp";
 
-const REFRESH_IF_OLDER_MS = 6 * 60 * 60 * 1000;
+const REFRESH_IF_OLDER_MS = 4 * 60 * 60 * 1000;
 
 // Bump to force full Solidgate re-fetch (e.g. after fixing the denominator query).
 const STATE_VERSION = "v2-single-month-fetch";
@@ -34,7 +34,9 @@ export async function buildSolidgateSnapshotIncremental(
 
   const needs = channels.filter((c) => {
     const st = state[c.name];
-    if (!st || !st.ok) return true;
+    if (!st) return true;
+    // Honor REFRESH_IF_OLDER_MS even for failed states — avoids hammering Solidgate
+    // when a channel keeps timing out (as happened Jul 9-13 2026).
     return Date.now() - new Date(st.refreshed_at).getTime() > REFRESH_IF_OLDER_MS;
   });
   needs.sort((a, b) => {
@@ -66,9 +68,8 @@ export async function buildSolidgateSnapshotIncremental(
         error: res.ok ? undefined : res.error,
         rows: res.ok ? res.rows : state[c.name]?.rows ?? [],
         charge_windows: res.charge_windows ?? prevWin,
-        refreshed_at: res.ok
-          ? new Date().toISOString()
-          : state[c.name]?.refreshed_at ?? new Date(0).toISOString(),
+        // Stamp refreshed_at unconditionally so per-channel backoff applies to failed runs too
+        refreshed_at: new Date().toISOString(),
         state_version: STATE_VERSION,
       } as AccountState & { state_version: string };
       if (res.ok) refreshed++;
