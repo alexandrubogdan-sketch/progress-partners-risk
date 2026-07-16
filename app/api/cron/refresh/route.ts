@@ -108,24 +108,16 @@ export async function GET(req: NextRequest) {
       console.warn("Stripe pipeline skipped:", e instanceof Error ? e.message : e);
     }
 
-    // ── Solidgate pipeline ──
+    // ── Solidgate pipeline ── [DISABLED 2026-07-15: Solidgate reported 429 rate-limiting; investigate before re-enabling]
+    // eslint-disable-next-line prefer-const
     let solidSnap: Snapshot | null = null;
+    // eslint-disable-next-line prefer-const
     let solidState: StateMap = {};
+    // eslint-disable-next-line prefer-const
     let solidRefreshed = 0;
+    // eslint-disable-next-line prefer-const
     let solidRemaining = 0;
-    try {
-      const channels = parseSolidgateChannels();
-      if (channels.length > 0) {
-        const prev = await loadStateFor("state-solidgate");
-        const res = await buildSolidgateSnapshotIncremental(channels, prev, deadline, 4);
-        solidSnap = res.snapshot;
-        solidState = res.state;
-        solidRefreshed = res.refreshed;
-        solidRemaining = res.remaining;
-      }
-    } catch (e) {
-      console.warn("Solidgate pipeline failed:", e instanceof Error ? e.message : e);
-    }
+    console.warn('[kill-switch] Solidgate pipeline disabled — awaiting root cause on rate-limit');
 
     const combined = mergeSnapshots(stripeSnap, solidSnap);
 
