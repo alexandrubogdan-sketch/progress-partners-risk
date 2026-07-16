@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { put } from "@vercel/blob";
 import { buildSnapshotIncremental, parseAccounts, type Snapshot, type StateMap, type VampRow } from "@/lib/vamp";
-import { buildSolidgateSnapshotIncremental, parseSolidgateChannels } from "@/lib/solidgate-snapshot";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -109,14 +108,8 @@ export async function GET(req: NextRequest) {
     }
 
     // ── Solidgate pipeline ── [DISABLED 2026-07-15: Solidgate reported 429 rate-limiting; investigate before re-enabling]
-    // eslint-disable-next-line prefer-const
-    let solidSnap: Snapshot | null = null;
-    // eslint-disable-next-line prefer-const
-    let solidState: StateMap = {};
-    // eslint-disable-next-line prefer-const
-    let solidRefreshed = 0;
-    // eslint-disable-next-line prefer-const
-    let solidRemaining = 0;
+    const solidSnap: Snapshot | null = null;
+    const solidState: StateMap = {};
     console.warn('[kill-switch] Solidgate pipeline disabled — awaiting root cause on rate-limit');
 
     const combined = mergeSnapshots(stripeSnap, solidSnap);
@@ -140,12 +133,10 @@ export async function GET(req: NextRequest) {
       stripe: stripeSnap
         ? { accounts_ok: stripeSnap.accounts_ok, accounts_total: stripeSnap.accounts_total, refreshed: stripeRefreshed, remaining: stripeRemaining }
         : { skipped: "STRIPE_ACCOUNTS not set or parse error" },
-      solidgate: solidSnap
-        ? { channels_ok: solidSnap.accounts_ok, channels_total: solidSnap.accounts_total, refreshed: solidRefreshed, remaining: solidRemaining }
-        : { skipped: "SOLIDGATE_ACCOUNTS not set" },
+      solidgate: { skipped: "disabled (kill switch active) — see cron route source" },
       errors: combined.errors,
       note:
-        stripeRemaining + solidRemaining > 0
+        stripeRemaining > 0
           ? "Run again to refresh the remaining accounts/channels."
           : "All accounts refreshed.",
     });
